@@ -1,10 +1,7 @@
-name: Temporary notebook execution
+name: Temporary notebook execution V3
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'tmp/notebook.ipynb.gz.b64'
-      - '.github/workflows/tmp-notebook-run.yml'
 jobs:
   execute:
     runs-on: ubuntu-latest

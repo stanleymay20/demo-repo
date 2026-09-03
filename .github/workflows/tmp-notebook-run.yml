@@ -1,0 +1,64 @@
+name: Temporary notebook execution
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tmp/notebook.ipynb.gz.b64'
+      - '.github/workflows/tmp-notebook-run.yml'
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MPLBACKEND: Agg
+      TF_CPP_MIN_LOG_LEVEL: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-notebook-run
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Reconstruct notebook
+        run: |
+          python - <<'PY'
+          import base64,gzip,pathlib
+          p=pathlib.Path('tmp/notebook.ipynb.gz.b64')
+          pathlib.Path('notebook.ipynb').write_bytes(gzip.decompress(base64.b64decode(p.read_text().strip())))
+          PY
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install tensorflow==2.21.0 scikit-learn pandas matplotlib nbconvert ipykernel
+      - name: Execute notebook
+        run: |
+          jupyter nbconvert --to notebook --execute notebook.ipynb --output executed.ipynb --ExecutePreprocessor.timeout=3600 --ExecutePreprocessor.kernel_name=python3
+      - name: Export HTML
+        run: |
+          jupyter nbconvert --to html executed.ipynb --output final.html
+      - name: Audit executed notebook
+        run: |
+          python - <<'PY'
+          import json,ast
+          nb=json.load(open('executed.ipynb',encoding='utf-8'))
+          code=sum(len(''.join(c.get('source',[]))) for c in nb['cells'] if c['cell_type']=='code')
+          md=sum(len(''.join(c.get('source',[]))) for c in nb['cells'] if c['cell_type']=='markdown')
+          errors=[]; counts=[]; images=[]
+          for i,c in enumerate(nb['cells']):
+              if c['cell_type']=='code':
+                  ast.parse(''.join(c.get('source',[]))); counts.append(c.get('execution_count'))
+                  nimg=sum('image/png' in o.get('data',{}) for o in c.get('outputs',[]) if isinstance(o.get('data',{}),dict))
+                  if nimg: images.append([i,nimg])
+                  for o in c.get('outputs',[]):
+                      if o.get('output_type')=='error': errors.append((i,o.get('ename'),o.get('evalue')))
+          audit={'code_chars':code,'markdown_chars':md,'total_chars':code+md,'cells':len(nb['cells']),'execution_counts':counts,'errors':errors,'image_outputs':images}
+          open('audit.json','w').write(json.dumps(audit,indent=2)); print(json.dumps(audit,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: final-notebook-output-v3
+          path: |
+            executed.ipynb
+            final.html
+            audit.json
+          retention-days: 1

@@ -1,0 +1,1 @@
+Trigger AgentShield contextual evaluation after workflow registration on main.

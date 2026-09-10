@@ -1,4 +1,4 @@
-name: AgentShield contextual evaluation
+name: AgentShield frozen final test
 
 on:
   push:
@@ -10,9 +10,8 @@ on:
 jobs:
   evaluate:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
     env:
-      TOKENIZERS_PARALLELISM: 'false'
       HF_HUB_DISABLE_TELEMETRY: '1'
     steps:
       - uses: actions/checkout@v4
@@ -22,13 +21,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install 'numpy<3' pandas pyarrow datasets beautifulsoup4 lxml scikit-learn sentence-transformers torch
-      - name: Run AgentShield evaluation
-        run: python agentshield/agentshield_eval.py
-      - name: Upload results
+          python -m pip install 'numpy<3' pandas pyarrow datasets beautifulsoup4 lxml scikit-learn
+      - name: Run frozen AgentShield official test
+        run: python agentshield/agentshield_final_test.py
+      - name: Upload final test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: agentshield-results
-          path: agentshield_results.json
+          name: agentshield-final-test-results
+          path: agentshield_final_test_results.json
           if-no-files-found: warn

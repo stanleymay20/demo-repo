@@ -1,0 +1,36 @@
+name: AgentShield v13.5 clean-run QA
+
+on:
+  push:
+    branches: [agentshield-eval-v11]
+    paths:
+      - 'agentshield/agentshield_v13_5_cleanrun.py'
+      - '.github/workflows/agentshield-v13-5-cleanrun.yml'
+
+jobs:
+  cleanrun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TOKENIZERS_PARALLELISM: 'false'
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      MPLBACKEND: 'Agg'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'numpy<3' pandas pyarrow datasets beautifulsoup4 lxml scikit-learn sentence-transformers torch matplotlib ipython
+      - name: Run v13.5 clean-run QA
+        run: |
+          python agentshield/agentshield_v13_5_cleanrun.py | tee agentshield_v13_5_cleanrun.log
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshield-v13-5-cleanrun-evidence
+          path: agentshield_v13_5_cleanrun.log
+          if-no-files-found: error

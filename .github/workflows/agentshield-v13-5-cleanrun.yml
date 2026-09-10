@@ -1,0 +1,117 @@
+name: AgentShield v13.5 clean notebook run
+
+on:
+  push:
+    branches: [agentshield-v13-5-cleanrun]
+    paths:
+      - 'agentshield/v13_5_parts/**'
+      - '.github/workflows/agentshield-v13-5-cleanrun.yml'
+
+jobs:
+  execute-notebook:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      TOKENIZERS_PARALLELISM: 'false'
+      HF_HUB_DISABLE_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Reconstruct exact v13.5 source
+        run: |
+          cat agentshield/v13_5_parts/part1.b64 \
+              agentshield/v13_5_parts/part2.b64 \
+              agentshield/v13_5_parts/part3.b64 \
+              agentshield/v13_5_parts/part4.b64 \
+            | base64 -d > agentshield/AgentShield_M508_Final_v13_5_Source.ipynb
+          echo "90a95d942e8972f81c291bbf82cfc573245375646d321e877161b85259adc4e9  agentshield/AgentShield_M508_Final_v13_5_Source.ipynb" | sha256sum -c -
+
+      - name: Install runtime
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'numpy<3' pandas pyarrow datasets beautifulsoup4 lxml scikit-learn sentence-transformers torch matplotlib nbconvert ipykernel
+          python -m ipykernel install --user --name python3 --display-name 'Python 3'
+
+      - name: Execute exact notebook from a clean kernel
+        run: |
+          jupyter nbconvert \
+            --to notebook --execute agentshield/AgentShield_M508_Final_v13_5_Source.ipynb \
+            --output AgentShield_M508_Final_v13_5_Executed.ipynb \
+            --output-dir agentshield \
+            --ExecutePreprocessor.timeout=14400 \
+            --ExecutePreprocessor.kernel_name=python3
+
+      - name: Export exact executed notebook to HTML
+        run: |
+          jupyter nbconvert \
+            --to html agentshield/AgentShield_M508_Final_v13_5_Executed.ipynb \
+            --output AgentShield_M508_Final_v13_5_Executed.html \
+            --output-dir agentshield \
+            --HTMLExporter.exclude_input_prompt=True \
+            --HTMLExporter.exclude_output_prompt=True
+
+      - name: Forensic QA
+        run: |
+          python - <<'PY'
+          import nbformat, json, hashlib, pathlib
+          p=pathlib.Path('agentshield/AgentShield_M508_Final_v13_5_Executed.ipynb')
+          nb=nbformat.read(p,as_version=4)
+          source_chars=sum(len(c.source) for c in nb.cells)
+          code=[c for c in nb.cells if c.cell_type=='code']
+          errors=[]
+          output_text=[]
+          for i,c in enumerate(code):
+              for o in c.get('outputs',[]):
+                  if o.output_type=='error':
+                      errors.append({'code_cell':i,'ename':o.get('ename'),'evalue':o.get('evalue')})
+                  if o.output_type=='stream': output_text.append(str(o.get('text','')))
+                  elif o.output_type in ('display_data','execute_result'):
+                      output_text.append(str(o.get('data',{}).get('text/plain','')))
+          allsrc='\n'.join(c.source for c in nb.cells)
+          out='\n'.join(output_text)
+          qa={
+              'source_chars':source_chars,
+              'headroom_below_20000':20000-source_chars,
+              'cells':len(nb.cells),
+              'code_cells':len(code),
+              'all_code_cells_executed':all(c.execution_count is not None for c in code),
+              'errors':errors,
+              'stale_M1_Visible_LR':('M1 Visible LR' in allsrc),
+              'stale_capital_Holdout':('Holdout' in allsrc),
+              'contains_expected_validation_recall':('0.2972' in out),
+              'contains_expected_audit_recall':('0.2655' in out),
+              'contains_expected_benchmark_recall':('0.2791' in out),
+          }
+          assert source_chars < 20000, qa
+          assert len(code)==8, qa
+          assert qa['all_code_cells_executed'], qa
+          assert not errors, qa
+          assert not qa['stale_M1_Visible_LR'], qa
+          assert not qa['stale_capital_Holdout'], qa
+          pathlib.Path('agentshield/v13_5_qa.json').write_text(json.dumps(qa,indent=2))
+          print(json.dumps(qa,indent=2))
+          PY
+          sha256sum \
+            agentshield/AgentShield_M508_Final_v13_5_Source.ipynb \
+            agentshield/AgentShield_M508_Final_v13_5_Executed.ipynb \
+            agentshield/AgentShield_M508_Final_v13_5_Executed.html \
+            agentshield/v13_5_qa.json \
+            > agentshield/v13_5_sha256.txt
+          cat agentshield/v13_5_sha256.txt
+
+      - name: Upload clean-run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshield-v13-5-cleanrun
+          path: |
+            agentshield/AgentShield_M508_Final_v13_5_Source.ipynb
+            agentshield/AgentShield_M508_Final_v13_5_Executed.ipynb
+            agentshield/AgentShield_M508_Final_v13_5_Executed.html
+            agentshield/v13_5_qa.json
+            agentshield/v13_5_sha256.txt
+          if-no-files-found: warn

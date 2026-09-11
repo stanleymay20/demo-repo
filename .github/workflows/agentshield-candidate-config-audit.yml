@@ -1,0 +1,35 @@
+name: AgentShield candidate classifier config audit
+
+on:
+  push:
+    branches: [agentshield-high-recall-research]
+    paths:
+      - 'agentshield/candidate_model_config_audit.py'
+      - '.github/workflows/agentshield-candidate-config-audit.yml'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install lightweight dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install transformers huggingface_hub
+      - name: Audit candidate configs
+        run: |
+          python agentshield/candidate_model_config_audit.py | tee agentshield/candidate_model_config_audit.log
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshield-candidate-config-audit
+          path: agentshield/candidate_model_config_audit.log
+          if-no-files-found: error

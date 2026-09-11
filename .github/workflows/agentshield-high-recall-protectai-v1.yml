@@ -1,0 +1,40 @@
+name: AgentShield high-recall ProtectAI v1
+
+on:
+  push:
+    branches: [agentshield-high-recall-research]
+    paths:
+      - 'agentshield/high_recall_protectai_v1.py'
+      - '.github/workflows/agentshield-high-recall-protectai-v1.yml'
+  workflow_dispatch:
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      PYTHONHASHSEED: '42'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'numpy<3' pandas pyarrow datasets beautifulsoup4 lxml scipy scikit-learn torch transformers sentencepiece
+      - name: Run verified specialist experiment
+        run: |
+          python agentshield/high_recall_protectai_v1.py | tee agentshield/high_recall_protectai_v1.log
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshield-high-recall-protectai-v1-evidence
+          path: |
+            agentshield/high_recall_protectai_v1.log
+            agentshield/results/high_recall_protectai_v1_validation.csv
+            agentshield/results/high_recall_protectai_v1_evidence.json
+          if-no-files-found: warn

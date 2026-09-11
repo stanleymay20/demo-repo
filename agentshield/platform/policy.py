@@ -1,16 +1,8 @@
 """Versioned policy engine for AgentShield.
 
-Detection, provenance, capability scope and action consequence are deliberately separate
-inputs. A detector emits risk evidence; it never grants authority.
-
-Policy v2 rules:
-- an action outside its explicit capability grant -> BLOCK;
-- a missing/indeterminate grant -> REVIEW;
-- HIGH content + SENSITIVE action -> BLOCK;
-- LOW content + NORMAL action may ALLOW only with known provenance and in-scope authority;
-- every other mixed, elevated or UNKNOWN state -> REVIEW.
-
-UNKNOWN never silently degrades to ALLOW.
+Detection, provenance, capability scope, authoritative tool metadata and action
+consequence are deliberately separate inputs. A detector emits risk evidence; it never
+grants authority, and an agent cannot self-declare a weaker capability set.
 """
 
 from __future__ import annotations
@@ -47,6 +39,7 @@ class PolicyInput:
     action_risk: ActionRisk
     trust_level: TrustLevel = TrustLevel.UNKNOWN
     scope_permitted: bool | None = None
+    tool_verified: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +51,13 @@ class PolicyDecision:
 
 def decide(value: PolicyInput) -> PolicyDecision:
     """Return the deterministic policy-v2 decision for one request."""
+
+    if value.tool_verified is False:
+        return PolicyDecision(
+            decision=Decision.BLOCK,
+            policy_version=POLICY_VERSION,
+            reason="tool capability declaration is unregistered or mismatches the authoritative manifest",
+        )
 
     if value.scope_permitted is False:
         return PolicyDecision(
@@ -74,6 +74,13 @@ def decide(value: PolicyInput) -> PolicyDecision:
             decision=Decision.BLOCK,
             policy_version=POLICY_VERSION,
             reason="high content risk combined with a sensitive action",
+        )
+
+    if value.tool_verified is None:
+        return PolicyDecision(
+            decision=Decision.REVIEW,
+            policy_version=POLICY_VERSION,
+            reason="authoritative tool verification is missing or indeterminate",
         )
 
     if value.scope_permitted is None:
@@ -97,7 +104,7 @@ def decide(value: PolicyInput) -> PolicyDecision:
         return PolicyDecision(
             decision=Decision.ALLOW,
             policy_version=POLICY_VERSION,
-            reason="low content risk, known provenance and an in-scope normal action",
+            reason="low content risk, verified tool, known provenance and an in-scope normal action",
         )
 
     return PolicyDecision(

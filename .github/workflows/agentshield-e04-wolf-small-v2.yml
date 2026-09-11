@@ -1,0 +1,69 @@
+name: AgentShield E04 Wolf Defender Small v2
+
+on:
+  push:
+    branches: [agentshield-e04-wolf-small-v2]
+    paths:
+      - 'agentshield/E04_PROTOCOL_WOLF_SMALL_V2.md'
+      - 'agentshield/high_recall_wolf_small_v2.py'
+      - '.github/workflows/agentshield-e04-wolf-small-v2.yml'
+  workflow_dispatch:
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      PYTHONHASHSEED: '42'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'numpy<3' pandas pyarrow datasets beautifulsoup4 lxml scipy scikit-learn transformers huggingface-hub onnxruntime
+
+      - name: Validate experiment source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile agentshield/high_recall_wolf_small_v2.py
+          mkdir -p agentshield/results
+          {
+            echo "E04 runtime manifest"
+            echo "commit=$GITHUB_SHA"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "runner_os=$RUNNER_OS"
+            python --version
+            sha256sum agentshield/E04_PROTOCOL_WOLF_SMALL_V2.md
+            sha256sum agentshield/high_recall_wolf_small_v2.py
+            sha256sum .github/workflows/agentshield-e04-wolf-small-v2.yml
+            python -m pip freeze
+          } > agentshield/results/e04_runtime_manifest.txt
+
+      - name: Run E04 verified specialist experiment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python agentshield/high_recall_wolf_small_v2.py | tee agentshield/high_recall_wolf_small_v2.log
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshield-e04-wolf-small-v2-evidence
+          path: |
+            agentshield/E04_PROTOCOL_WOLF_SMALL_V2.md
+            agentshield/high_recall_wolf_small_v2.py
+            agentshield/high_recall_wolf_small_v2.log
+            agentshield/results/e04_runtime_manifest.txt
+            agentshield/results/high_recall_wolf_small_v2_validation.csv
+            agentshield/results/high_recall_wolf_small_v2_evidence.json
+          if-no-files-found: warn

@@ -95,6 +95,7 @@ def run_scenario(scenario: Scenario, *, executor: ToolExecutor) -> ScenarioRun:
         content=scenario.content,
         action=scenario.action,
         detector=detector,
+        payload=scenario.payload,
     )
     if pipeline.policy.decision is not scenario.expected_decision:
         raise AssertionError(

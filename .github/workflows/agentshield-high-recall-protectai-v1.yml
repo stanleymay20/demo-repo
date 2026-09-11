@@ -24,9 +24,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install 'numpy<3' pandas pyarrow datasets beautifulsoup4 lxml scipy scikit-learn torch transformers sentencepiece
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
+          python -m pip install 'numpy<3' pandas pyarrow datasets beautifulsoup4 lxml scipy scikit-learn transformers sentencepiece
       - name: Run verified specialist experiment
+        shell: bash
         run: |
+          set -o pipefail
           python agentshield/high_recall_protectai_v1.py | tee agentshield/high_recall_protectai_v1.log
       - name: Upload evidence
         if: always()

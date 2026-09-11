@@ -1,0 +1,67 @@
+name: AgentShield Assessment v14 High Recall
+
+on:
+  push:
+    branches:
+      - agentshield-assessment-v14-high-recall
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'numpy<3' pandas scipy scikit-learn datasets pyarrow beautifulsoup4 lxml
+
+      - name: Validate experiment source
+        run: |
+          python -m py_compile agentshield/assessment_v14_high_recall.py
+          test -f agentshield/ASSESSMENT_V14_HIGH_RECALL_PROTOCOL.md
+
+      - name: Runtime manifest
+        run: |
+          mkdir -p agentshield/results
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+            echo "python=$(python --version 2>&1)"
+            sha256sum agentshield/ASSESSMENT_V14_HIGH_RECALL_PROTOCOL.md
+            sha256sum agentshield/assessment_v14_high_recall.py
+            sha256sum .github/workflows/agentshield-assessment-v14-high-recall.yml
+            pip freeze
+          } > agentshield/results/assessment_v14_runtime_manifest.txt
+
+      - name: Run controlled v14 experiment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python agentshield/assessment_v14_high_recall.py 2>&1 | tee agentshield/results/assessment_v14.log
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshield-assessment-v14-evidence
+          if-no-files-found: warn
+          path: |
+            agentshield/ASSESSMENT_V14_HIGH_RECALL_PROTOCOL.md
+            agentshield/assessment_v14_high_recall.py
+            agentshield/results/assessment_v14_runtime_manifest.txt
+            agentshield/results/assessment_v14.log
+            agentshield/results/assessment_v14_validation.csv
+            agentshield/results/assessment_v14_evidence.json

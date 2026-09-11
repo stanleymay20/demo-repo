@@ -15,6 +15,7 @@ from .detectors import DetectionResult
 from .evaluation import ScenarioKind, ScenarioOutcome, SystemMetrics, compute_system_metrics
 from .evaluation_v2 import ConsequenceMetrics, ConsequenceOutcome, compute_consequence_metrics
 from .execution import ExecutionResult, ToolExecutor, enforce_and_execute
+from .grants import GrantAuthority
 from .pipeline import PipelineResult, evaluate_request
 from .policy import ContentRisk, Decision
 from .provenance import InputProvenance, TrustLevel
@@ -96,6 +97,12 @@ def run_scenario(scenario: Scenario, *, executor: ToolExecutor) -> ScenarioRun:
         allowed_capabilities=scenario.allowed_capabilities,
         issuer="scenario-suite",
     )
+    # The scenario harness models a trusted host issuing the capability grant.
+    # This keeps synthetic ALLOW cases aligned with the production contract:
+    # an AuthorizationScope is descriptive until a server-owned authority
+    # verifies that the grant is genuine, current and unconsumed.
+    authority = GrantAuthority()
+    authority.issue(scope)
     manifest_caps = (
         scenario.action.capabilities
         if scenario.manifest_capabilities is None
@@ -114,6 +121,7 @@ def run_scenario(scenario: Scenario, *, executor: ToolExecutor) -> ScenarioRun:
         provenance=provenance,
         authorization_scope=scope,
         tool_registry=registry,
+        grant_authority=authority,
     )
     if pipeline.policy.decision is not scenario.expected_decision:
         raise AssertionError(
@@ -127,6 +135,7 @@ def run_scenario(scenario: Scenario, *, executor: ToolExecutor) -> ScenarioRun:
         executor=executor,
         authorization_scope=scope,
         tool_registry=registry,
+        grant_authority=authority,
     )
     return ScenarioRun(scenario, pipeline, execution)
 

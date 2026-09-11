@@ -18,9 +18,10 @@ class PolicyV2Tests(unittest.TestCase):
             action_risk=action_risk,
             trust_level=trust,
             scope_permitted=True,
+            tool_verified=True,
         )
 
-    def test_low_content_normal_action_allows_when_scoped_and_provenance_known(self):
+    def test_low_content_normal_action_allows_when_all_boundaries_pass(self):
         result = decide(self.scoped(ContentRisk.LOW, ActionRisk.NORMAL))
         self.assertEqual(result.decision, Decision.ALLOW)
         self.assertEqual(result.policy_version, POLICY_VERSION)
@@ -40,12 +41,32 @@ class PolicyV2Tests(unittest.TestCase):
         result = decide(self.scoped(ContentRisk.HIGH, ActionRisk.SENSITIVE))
         self.assertEqual(result.decision, Decision.BLOCK)
 
-    def test_high_content_normal_action_reviews(self):
-        result = decide(self.scoped(ContentRisk.HIGH, ActionRisk.NORMAL))
-        self.assertEqual(result.decision, Decision.REVIEW)
-
     def test_low_content_sensitive_action_reviews(self):
         result = decide(self.scoped(ContentRisk.LOW, ActionRisk.SENSITIVE))
+        self.assertEqual(result.decision, Decision.REVIEW)
+
+    def test_unverified_tool_blocks(self):
+        result = decide(
+            PolicyInput(
+                content_risk=ContentRisk.LOW,
+                action_risk=ActionRisk.NORMAL,
+                trust_level=TrustLevel.TRUSTED,
+                scope_permitted=True,
+                tool_verified=False,
+            )
+        )
+        self.assertEqual(result.decision, Decision.BLOCK)
+
+    def test_missing_tool_verification_reviews(self):
+        result = decide(
+            PolicyInput(
+                content_risk=ContentRisk.LOW,
+                action_risk=ActionRisk.NORMAL,
+                trust_level=TrustLevel.TRUSTED,
+                scope_permitted=True,
+                tool_verified=None,
+            )
+        )
         self.assertEqual(result.decision, Decision.REVIEW)
 
     def test_out_of_scope_action_blocks_even_if_content_is_low(self):
@@ -55,6 +76,7 @@ class PolicyV2Tests(unittest.TestCase):
                 action_risk=ActionRisk.NORMAL,
                 trust_level=TrustLevel.TRUSTED,
                 scope_permitted=False,
+                tool_verified=True,
             )
         )
         self.assertEqual(result.decision, Decision.BLOCK)
@@ -66,6 +88,7 @@ class PolicyV2Tests(unittest.TestCase):
                 action_risk=ActionRisk.NORMAL,
                 trust_level=TrustLevel.TRUSTED,
                 scope_permitted=None,
+                tool_verified=True,
             )
         )
         self.assertEqual(result.decision, Decision.REVIEW)
@@ -77,6 +100,7 @@ class PolicyV2Tests(unittest.TestCase):
                 action_risk=ActionRisk.NORMAL,
                 trust_level=TrustLevel.UNKNOWN,
                 scope_permitted=True,
+                tool_verified=True,
             )
         )
         self.assertEqual(result.decision, Decision.REVIEW)

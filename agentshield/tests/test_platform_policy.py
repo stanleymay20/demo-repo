@@ -11,7 +11,7 @@ from agentshield.platform.policy import (
 from agentshield.platform.provenance import TrustLevel
 
 
-class PolicyV2Tests(unittest.TestCase):
+class PolicyV3Tests(unittest.TestCase):
     def scoped(self, content_risk, action_risk, trust=TrustLevel.TRUSTED):
         return PolicyInput(
             content_risk=content_risk,
@@ -19,15 +19,16 @@ class PolicyV2Tests(unittest.TestCase):
             trust_level=trust,
             scope_permitted=True,
             tool_verified=True,
+            grant_valid=True,
         )
 
     def test_low_content_normal_action_allows_when_all_boundaries_pass(self):
         result = decide(self.scoped(ContentRisk.LOW, ActionRisk.NORMAL))
         self.assertEqual(result.decision, Decision.ALLOW)
         self.assertEqual(result.policy_version, POLICY_VERSION)
-        self.assertEqual(POLICY_VERSION, "agentshield-policy-v2")
+        self.assertEqual(POLICY_VERSION, "agentshield-policy-v3")
 
-    def test_known_untrusted_low_normal_can_allow_when_explicitly_scoped(self):
+    def test_known_untrusted_low_normal_can_allow_when_explicitly_authorized(self):
         result = decide(
             self.scoped(
                 ContentRisk.LOW,
@@ -36,6 +37,32 @@ class PolicyV2Tests(unittest.TestCase):
             )
         )
         self.assertEqual(result.decision, Decision.ALLOW)
+
+    def test_invalid_grant_blocks(self):
+        result = decide(
+            PolicyInput(
+                content_risk=ContentRisk.LOW,
+                action_risk=ActionRisk.NORMAL,
+                trust_level=TrustLevel.TRUSTED,
+                scope_permitted=True,
+                tool_verified=True,
+                grant_valid=False,
+            )
+        )
+        self.assertEqual(result.decision, Decision.BLOCK)
+
+    def test_missing_grant_authority_reviews(self):
+        result = decide(
+            PolicyInput(
+                content_risk=ContentRisk.LOW,
+                action_risk=ActionRisk.NORMAL,
+                trust_level=TrustLevel.TRUSTED,
+                scope_permitted=True,
+                tool_verified=True,
+                grant_valid=None,
+            )
+        )
+        self.assertEqual(result.decision, Decision.REVIEW)
 
     def test_high_content_sensitive_action_blocks(self):
         result = decide(self.scoped(ContentRisk.HIGH, ActionRisk.SENSITIVE))
@@ -53,6 +80,7 @@ class PolicyV2Tests(unittest.TestCase):
                 trust_level=TrustLevel.TRUSTED,
                 scope_permitted=True,
                 tool_verified=False,
+                grant_valid=True,
             )
         )
         self.assertEqual(result.decision, Decision.BLOCK)
@@ -65,6 +93,7 @@ class PolicyV2Tests(unittest.TestCase):
                 trust_level=TrustLevel.TRUSTED,
                 scope_permitted=True,
                 tool_verified=None,
+                grant_valid=True,
             )
         )
         self.assertEqual(result.decision, Decision.REVIEW)
@@ -77,6 +106,7 @@ class PolicyV2Tests(unittest.TestCase):
                 trust_level=TrustLevel.TRUSTED,
                 scope_permitted=False,
                 tool_verified=True,
+                grant_valid=True,
             )
         )
         self.assertEqual(result.decision, Decision.BLOCK)
@@ -89,6 +119,7 @@ class PolicyV2Tests(unittest.TestCase):
                 trust_level=TrustLevel.TRUSTED,
                 scope_permitted=None,
                 tool_verified=True,
+                grant_valid=True,
             )
         )
         self.assertEqual(result.decision, Decision.REVIEW)
@@ -101,6 +132,7 @@ class PolicyV2Tests(unittest.TestCase):
                 trust_level=TrustLevel.UNKNOWN,
                 scope_permitted=True,
                 tool_verified=True,
+                grant_valid=True,
             )
         )
         self.assertEqual(result.decision, Decision.REVIEW)

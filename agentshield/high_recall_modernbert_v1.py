@@ -8,7 +8,7 @@ External model: dannyliv/agent-guard-modernbert-base (V3.2), head 0 = is_injecti
 No claim is made about BrowseSafe benchmark performance from this experiment.
 """
 
-import gc, hashlib, json, math, os, re, time, warnings
+import hashlib, json, math, os, re, time, warnings
 import numpy as np
 import pandas as pd
 import torch
@@ -99,7 +99,7 @@ def score_docs(raws,tok,model):
             logits=model(**batch).logits[:,0]
             probs=torch.sigmoid(logits).cpu().numpy()
         first.append(float(probs[0])); maxs.append(float(probs.max()))
-        top2.append(float(np.mean(np.sort(probs)[-min(2,len(probs):)])))
+        top2.append(float(np.mean(np.sort(probs)[-min(2,len(probs)):])))
         chunk_counts.append(len(starts)); token_counts.append(len(ids))
         if (j+1)%100==0: print(f"scored {j+1}/{len(raws)} docs")
     return {"first":np.array(first),"max":np.array(maxs),"top2mean":np.array(top2)}, {

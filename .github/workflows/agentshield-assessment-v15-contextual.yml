@@ -1,0 +1,61 @@
+name: AgentShield Assessment v15 Contextual
+
+on:
+  push:
+    branches: [agentshield-assessment-v15-contextual]
+    paths:
+      - agentshield/assessment_v15_contextual.py
+      - agentshield/ASSESSMENT_V15_CONTEXTUAL_PROTOCOL.md
+      - .github/workflows/agentshield-assessment-v15-contextual.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "numpy<3" pandas scipy scikit-learn beautifulsoup4 lxml datasets torch transformers huggingface_hub
+      - name: Validate experiment source
+        run: |
+          python -m py_compile agentshield/assessment_v15_contextual.py
+          grep -q "benchmark_labels_accessed.*False" agentshield/assessment_v15_contextual.py
+          grep -q "audit_is_pristine.*False" agentshield/assessment_v15_contextual.py
+      - name: Runtime manifest
+        run: |
+          mkdir -p agentshield/results
+          python --version | tee agentshield/results/assessment_v15_runtime_manifest.txt
+          pip freeze >> agentshield/results/assessment_v15_runtime_manifest.txt
+          git rev-parse HEAD >> agentshield/results/assessment_v15_runtime_manifest.txt
+          sha256sum agentshield/assessment_v15_contextual.py agentshield/ASSESSMENT_V15_CONTEXTUAL_PROTOCOL.md >> agentshield/results/assessment_v15_runtime_manifest.txt
+      - name: Run controlled v15 experiment
+        env:
+          TOKENIZERS_PARALLELISM: "false"
+          PYTHONHASHSEED: "42"
+        run: |
+          set -o pipefail
+          python -u agentshield/assessment_v15_contextual.py 2>&1 | tee agentshield/results/assessment_v15.log
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshield-assessment-v15-evidence
+          path: |
+            agentshield/ASSESSMENT_V15_CONTEXTUAL_PROTOCOL.md
+            agentshield/assessment_v15_contextual.py
+            agentshield/results/assessment_v15_runtime_manifest.txt
+            agentshield/results/assessment_v15.log
+            agentshield/results/assessment_v15_evidence.json
+            agentshield/results/assessment_v15_validation.csv
+          if-no-files-found: warn

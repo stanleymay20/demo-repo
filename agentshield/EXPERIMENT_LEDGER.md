@@ -17,16 +17,19 @@ This ledger records experiments on branch `agentshield-high-recall-research`. It
 - Workflow: `AgentShield high-recall linear v1`
 - Run ID: `34571996510`
 - Head SHA: `47bae83e482bccb410788a9fd51947d38df1e79b`
-- Status at ledger creation: in progress
+- Status: in progress at last check.
 - Method: word + character + hidden/attribute TF-IDF; LinearSVC and Logistic Regression; validation-only hyperparameter/threshold selection; one-shot internal audit.
 - Benchmark labels accessed: no.
 - Result: pending; do not infer performance before the evidence artifact is available.
 
-## E02 — pretrained ModernBERT specialist, planned
+## E02 — pretrained `dannyliv/agent-guard-modernbert-base`
 - Script: `agentshield/high_recall_modernbert_v1.py`
-- Status: not promoted / not yet treated as valid evidence.
-- Required pre-run check: verify model label semantics and probability transformation from the model configuration before execution. Do not assume a logit column corresponds to injection without verification.
-- Purpose: test chunk-level aggregation (first/max/top-2 mean) without fine-tuning on BrowseSafe.
+- Workflow run: `34572178470`.
+- Status: **invalid for interpretation; do not promote any metric from this run.**
+- Reason: pre-run label audit showed the checkpoint is a 17-label multi-label classifier with generic labels `LABEL_0`…`LABEL_16`; the injection class cannot be uniquely identified from the model configuration.
+- Label-audit run: `34572301543`.
+- Verified config: `num_labels=17`, `problem_type=multi_label_classification`, tokenizer max length `8192`.
+- Consequence: the original E02 script's use of `logits[:,0]` cannot be treated as a prompt-injection probability without authoritative label semantics. Any output from E02 is quarantined as methodologically invalid.
 
 ## Promotion gates
 50%, 70%, 85%, 90%, 95%, 99%, and 99.9% recall are descriptive milestones only. Every gate also requires observed FPR <=1% on the relevant frozen audit/holdout and clean integrity checks.

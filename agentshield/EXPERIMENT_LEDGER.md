@@ -11,16 +11,22 @@ This ledger records experiments on branch `agentshield-high-recall-research`. It
 - No result is promoted from logs alone without preserved configuration and evidence files.
 - Unexpectedly strong results trigger leakage/contamination checks before interpretation.
 - 99.9% is a stretch hypothesis, not a required outcome.
+- Repeated use of the same internal audit across model families makes it corroborating evidence, not a pristine final holdout; any breakthrough claim requires a new untouched external holdout.
 
 ## E01 — sparse high-recall search
 - Script: `agentshield/high_recall_linear_v1.py`
 - Workflow: `AgentShield high-recall linear v1`
 - Run ID: `34571996510`
 - Head SHA: `47bae83e482bccb410788a9fd51947d38df1e79b`
-- Status: in progress at last check.
+- Status: **completed successfully**.
 - Method: word + character + hidden/attribute TF-IDF; LinearSVC and Logistic Regression; validation-only hyperparameter/threshold selection; one-shot internal audit.
+- Data hygiene: 1 normalized training duplicate removed and 1 normalized train/benchmark overlap removed; development/validation/audit = 7725/1656/1656.
+- Validation winner: `LogReg_C1_pw1`, threshold `0.6231860540`; recall **62.97%** at observed FPR **0.958%**, precision 98.48%, ROC-AUC 0.9279 (517 TP, 304 FN, 8 FP, 827 TN).
+- Frozen-threshold internal audit: recall **57.25%** at observed FPR **1.078%**, precision 98.12%, ROC-AUC 0.9127 (470 TP, 351 FN, 9 FP, 826 TN). Recall 95% CI 53.84–60.59%; FPR 95% CI 0.568–2.036%.
+- Gate A (>=50% recall AND observed FPR <=1% on audit): **FAIL** because audit FPR is 1.078%, despite the large recall improvement.
 - Benchmark labels accessed: no.
-- Result: pending; do not infer performance before the evidence artifact is available.
+- Evidence artifact: ID `10188873481`, SHA-256 `8a8227f85058ff29f69f5b43b044087a4eac89ecfe1e53a683b9f2421d620acc`.
+- Interpretation: this is a genuine improvement over the frozen baseline, but it is **not promoted** under the predeclared <=1% audit-FPR gate. The audit threshold is not retuned after seeing this result.
 
 ## E02 — pretrained `dannyliv/agent-guard-modernbert-base`
 - Script: `agentshield/high_recall_modernbert_v1.py`

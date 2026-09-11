@@ -1,0 +1,27 @@
+name: AgentShield platform v1 CI
+
+on:
+  push:
+    branches: [agentshield-platform-v1]
+    paths:
+      - 'agentshield/platform/**'
+      - 'agentshield/tests/test_platform_policy.py'
+      - 'agentshield/ARCHITECTURE_V1.md'
+      - '.github/workflows/agentshield-platform-v1-ci.yml'
+  pull_request:
+    paths:
+      - 'agentshield/platform/**'
+      - 'agentshield/tests/test_platform_policy.py'
+      - 'agentshield/ARCHITECTURE_V1.md'
+
+jobs:
+  policy-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run policy tests
+        run: python -m unittest agentshield.tests.test_platform_policy -v

@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+import hashlib
+import json
 import secrets
 
 from .authorization import AuthorizationScope
@@ -46,6 +48,34 @@ class GrantRecord:
             raise ValueError("grant timestamps must be timezone-aware")
         if self.expires_at_utc <= self.issued_at_utc:
             raise ValueError("grant expiry must be after issuance")
+
+
+def grant_record_digest(record: GrantRecord) -> str:
+    """Bind the immutable authorization record without logging its nonce in cleartext."""
+
+    material = {
+        "grant_id": record.grant_id,
+        "scope_digest": record.scope_digest,
+        "issuer": record.issuer,
+        "nonce": record.nonce,
+        "issued_at_utc": record.issued_at_utc.astimezone(timezone.utc).isoformat(),
+        "expires_at_utc": record.expires_at_utc.astimezone(timezone.utc).isoformat(),
+        "single_use": record.single_use,
+        "revoked": record.revoked,
+        "consumed_at_utc": (
+            None
+            if record.consumed_at_utc is None
+            else record.consumed_at_utc.astimezone(timezone.utc).isoformat()
+        ),
+    }
+    encoded = json.dumps(
+        material,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class GrantAuthority:
@@ -131,7 +161,7 @@ class GrantAuthority:
         *,
         now: datetime | None = None,
     ) -> tuple[GrantStatus, GrantRecord | None]:
-        """Atomically consume a single-use grant in this authority instance.
+        """Consume a single-use grant immediately before side-effect dispatch.
 
         A durable production implementation must provide the equivalent operation with
         a transactional compare-and-set so two workers cannot consume the same grant.

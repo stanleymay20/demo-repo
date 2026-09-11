@@ -1,7 +1,8 @@
 """Fail-closed execution boundary for AgentShield.
 
 The policy decision is not advisory: side effects are dispatched only after an ALLOW
-decision whose action, payload and least-privilege grant still match evaluation.
+decision whose action, payload, least-privilege grant and authoritative tool manifest
+still match evaluation.
 """
 
 from __future__ import annotations
@@ -12,9 +13,10 @@ from typing import Any, Mapping, Protocol
 
 from .actions import ActionDescriptor, classify_action
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
-from .integrity import action_digest, payload_digest, scope_digest
+from .integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
 from .pipeline import PipelineResult
 from .policy import Decision
+from .tools import ToolRegistry, ToolVerificationStatus, verify_action_descriptor
 
 
 class ExecutionStatus(str, Enum):
@@ -42,12 +44,9 @@ def enforce_and_execute(
     payload: Mapping[str, Any],
     executor: ToolExecutor,
     authorization_scope: AuthorizationScope | None = None,
+    tool_registry: ToolRegistry | None = None,
 ) -> ExecutionResult:
-    """Dispatch a tool call only when the evaluated request remains ALLOW-safe.
-
-    Integrity mismatches fail closed. REVIEW and BLOCK never reach the executor.
-    Raw untrusted content, raw payload values and full grants are not persisted here.
-    """
+    """Dispatch a tool call only when the evaluated request remains ALLOW-safe."""
 
     decision = pipeline_result.policy.decision
     event = pipeline_result.audit_event
@@ -57,6 +56,7 @@ def enforce_and_execute(
     recorded_payload_digest = metadata.get("payload_digest")
     recorded_grant_id = metadata.get("authorization_grant_id")
     recorded_scope_digest = metadata.get("authorization_scope_digest")
+    recorded_tool_manifest_digest = metadata.get("tool_manifest_digest")
     current_action_risk = classify_action(action).value
 
     if recorded_action != action.name:
@@ -78,6 +78,31 @@ def enforce_and_execute(
             status=ExecutionStatus.BLOCKED,
             decision=decision,
             reason="action payload changed after policy evaluation",
+        )
+
+    if tool_registry is None:
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="authoritative tool registry missing at execution",
+        )
+
+    tool_status, manifest = verify_action_descriptor(action, tool_registry)
+    if tool_status is not ToolVerificationStatus.VERIFIED or manifest is None:
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="tool is no longer verified by the authoritative registry",
+        )
+
+    if (
+        not recorded_tool_manifest_digest
+        or recorded_tool_manifest_digest != tool_manifest_digest(manifest)
+    ):
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="authoritative tool manifest changed after policy evaluation",
         )
 
     if authorization_scope is None:
@@ -150,6 +175,6 @@ def enforce_and_execute(
     return ExecutionResult(
         status=ExecutionStatus.EXECUTED,
         decision=decision,
-        reason="policy allowed action and execution integrity checks passed",
+        reason="policy allowed action and all execution integrity checks passed",
         output=output,
     )

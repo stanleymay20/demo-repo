@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 from .actions import ActionDescriptor, normalize_capabilities
 from .authorization import AuthorizationScope
+from .tools import ToolManifest
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -30,15 +31,11 @@ def _canonical_json(value: Any) -> bytes:
 
 
 def payload_digest(payload: Mapping[str, Any] | None) -> str:
-    """Return SHA-256 over a canonical JSON payload representation."""
-
     data = {} if payload is None else dict(payload)
     return hashlib.sha256(_canonical_json(data)).hexdigest()
 
 
 def action_digest(action: ActionDescriptor) -> str:
-    """Bind action identity and the full normalized capability declaration."""
-
     material = {
         "name": action.name.strip(),
         "capabilities": list(normalize_capabilities(action.capabilities)),
@@ -47,11 +44,18 @@ def action_digest(action: ActionDescriptor) -> str:
 
 
 def scope_digest(scope: AuthorizationScope) -> str:
-    """Bind the least-privilege grant without storing its raw capability set."""
-
     material = {
         "grant_id": scope.grant_id,
         "issuer": scope.issuer,
         "allowed_capabilities": list(scope.allowed_capabilities),
+    }
+    return hashlib.sha256(_canonical_json(material)).hexdigest()
+
+
+def tool_manifest_digest(manifest: ToolManifest) -> str:
+    material = {
+        "name": manifest.name,
+        "version": manifest.version,
+        "capabilities": list(manifest.capabilities),
     }
     return hashlib.sha256(_canonical_json(material)).hexdigest()

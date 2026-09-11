@@ -1,7 +1,8 @@
 """Composable AgentShield decision pipeline.
 
-Detector scoring, provenance, capability authorization, action classification, policy
-and audit are separate so that no model output becomes authorization by accident.
+Detector scoring, provenance, capability authorization, authoritative tool manifests,
+action classification, policy and audit are separate so that no model output becomes
+authorization by accident.
 """
 
 from __future__ import annotations
@@ -13,9 +14,10 @@ from .actions import ActionDescriptor, classify_action
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
 from .detectors import DetectionResult, Detector
 from .events import AuditEvent, build_audit_event
-from .integrity import action_digest, payload_digest, scope_digest
+from .integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
 from .policy import PolicyDecision, PolicyInput, decide
 from .provenance import InputProvenance, TrustLevel
+from .tools import ToolRegistry, ToolVerificationStatus, verify_action_descriptor
 
 
 @dataclass(frozen=True)
@@ -35,8 +37,9 @@ def evaluate_request(
     payload: Mapping[str, Any] | None = None,
     provenance: InputProvenance | None = None,
     authorization_scope: AuthorizationScope | None = None,
+    tool_registry: ToolRegistry | None = None,
 ) -> PipelineResult:
-    """Evaluate one proposed action against content risk and least-privilege authority."""
+    """Evaluate one proposed action against risk, scope and authoritative tool metadata."""
 
     if provenance is None:
         provenance = InputProvenance(
@@ -45,6 +48,16 @@ def evaluate_request(
         )
     elif provenance.source_type != source_type:
         raise ValueError("source_type must match provenance.source_type")
+
+    tool_status, manifest = verify_action_descriptor(action, tool_registry)
+    tool_verified = (
+        True
+        if tool_status is ToolVerificationStatus.VERIFIED
+        else False
+        if tool_status
+        in {ToolVerificationStatus.MISMATCH, ToolVerificationStatus.UNREGISTERED}
+        else None
+    )
 
     detection = detector.detect(content)
     action_risk = classify_action(action)
@@ -63,6 +76,7 @@ def evaluate_request(
             action_risk=action_risk,
             trust_level=provenance.trust_level,
             scope_permitted=scope_permitted,
+            tool_verified=tool_verified,
         )
     )
 
@@ -72,12 +86,20 @@ def evaluate_request(
         "payload_digest": payload_digest(payload),
         "provenance_trust": provenance.trust_level.value,
         "scope_status": scope_status.value,
+        "tool_status": tool_status.value,
     }
     if authorization_scope is not None:
         metadata.update(
             {
                 "authorization_grant_id": authorization_scope.grant_id,
                 "authorization_scope_digest": scope_digest(authorization_scope),
+            }
+        )
+    if manifest is not None:
+        metadata.update(
+            {
+                "tool_manifest_version": manifest.version,
+                "tool_manifest_digest": tool_manifest_digest(manifest),
             }
         )
 

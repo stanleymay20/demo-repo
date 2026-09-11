@@ -1,7 +1,7 @@
 """Fail-closed execution boundary for AgentShield.
 
 The policy decision is not advisory: side effects are dispatched only after an ALLOW
-decision whose action metadata and payload still match the evaluated request.
+decision whose action, payload and least-privilege grant still match evaluation.
 """
 
 from __future__ import annotations
@@ -11,7 +11,8 @@ from enum import Enum
 from typing import Any, Mapping, Protocol
 
 from .actions import ActionDescriptor, classify_action
-from .integrity import action_digest, payload_digest
+from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
+from .integrity import action_digest, payload_digest, scope_digest
 from .pipeline import PipelineResult
 from .policy import Decision
 
@@ -40,11 +41,12 @@ def enforce_and_execute(
     action: ActionDescriptor,
     payload: Mapping[str, Any],
     executor: ToolExecutor,
+    authorization_scope: AuthorizationScope | None = None,
 ) -> ExecutionResult:
     """Dispatch a tool call only when the evaluated request remains ALLOW-safe.
 
     Integrity mismatches fail closed. REVIEW and BLOCK never reach the executor.
-    Raw untrusted content or raw authorization payload values are not persisted here.
+    Raw untrusted content, raw payload values and full grants are not persisted here.
     """
 
     decision = pipeline_result.policy.decision
@@ -53,6 +55,8 @@ def enforce_and_execute(
     recorded_action = metadata.get("action_name")
     recorded_action_digest = metadata.get("action_digest")
     recorded_payload_digest = metadata.get("payload_digest")
+    recorded_grant_id = metadata.get("authorization_grant_id")
+    recorded_scope_digest = metadata.get("authorization_scope_digest")
     current_action_risk = classify_action(action).value
 
     if recorded_action != action.name:
@@ -74,6 +78,37 @@ def enforce_and_execute(
             status=ExecutionStatus.BLOCKED,
             decision=decision,
             reason="action payload changed after policy evaluation",
+        )
+
+    if authorization_scope is None:
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="authorization scope missing at execution",
+        )
+
+    if recorded_grant_id != authorization_scope.grant_id:
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="authorization grant changed after policy evaluation",
+        )
+
+    if (
+        not recorded_scope_digest
+        or recorded_scope_digest != scope_digest(authorization_scope)
+    ):
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="authorization scope changed after policy evaluation",
+        )
+
+    if check_action_scope(action, authorization_scope) is not ScopeStatus.PERMITTED:
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="action is no longer permitted by the authorization scope",
         )
 
     if event.action_risk != current_action_risk:

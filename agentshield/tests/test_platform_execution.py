@@ -39,24 +39,26 @@ class RecorderExecutor:
 
 
 class ExecutionBoundaryTests(unittest.TestCase):
-    def evaluate(self, *, risk, action):
+    def evaluate(self, *, risk, action, payload=None):
         return evaluate_request(
             request_id="req-test",
             source_type="unit-test",
             content="untrusted content",
             action=action,
             detector=FixedDetector(risk, 0.9 if risk is ContentRisk.HIGH else 0.1),
+            payload={} if payload is None else payload,
         )
 
     def test_low_risk_normal_action_executes(self):
         action = ActionDescriptor(name="read_calendar", capabilities=("read_data",))
-        result = self.evaluate(risk=ContentRisk.LOW, action=action)
+        payload = {"date": "2026-09-11"}
+        result = self.evaluate(risk=ContentRisk.LOW, action=action, payload=payload)
         executor = RecorderExecutor()
 
         execution = enforce_and_execute(
             pipeline_result=result,
             action=action,
-            payload={"date": "2026-09-11"},
+            payload=payload,
             executor=executor,
         )
 
@@ -66,13 +68,14 @@ class ExecutionBoundaryTests(unittest.TestCase):
 
     def test_sensitive_action_is_held_even_if_detector_is_low(self):
         action = ActionDescriptor(name="send_email", capabilities=("send_message",))
-        result = self.evaluate(risk=ContentRisk.LOW, action=action)
+        payload = {"to": "example@example.com"}
+        result = self.evaluate(risk=ContentRisk.LOW, action=action, payload=payload)
         executor = RecorderExecutor()
 
         execution = enforce_and_execute(
             pipeline_result=result,
             action=action,
-            payload={"to": "example@example.com"},
+            payload=payload,
             executor=executor,
         )
 
@@ -82,7 +85,7 @@ class ExecutionBoundaryTests(unittest.TestCase):
 
     def test_high_risk_sensitive_action_is_blocked(self):
         action = ActionDescriptor(name="delete_account", capabilities=("delete_data",))
-        result = self.evaluate(risk=ContentRisk.HIGH, action=action)
+        result = self.evaluate(risk=ContentRisk.HIGH, action=action, payload={})
         executor = RecorderExecutor()
 
         execution = enforce_and_execute(
@@ -100,7 +103,10 @@ class ExecutionBoundaryTests(unittest.TestCase):
         evaluated_action = ActionDescriptor(
             name="read_calendar", capabilities=("read_data",)
         )
-        result = self.evaluate(risk=ContentRisk.LOW, action=evaluated_action)
+        payload = {"date": "2026-09-11"}
+        result = self.evaluate(
+            risk=ContentRisk.LOW, action=evaluated_action, payload=payload
+        )
         swapped_action = ActionDescriptor(
             name="send_email", capabilities=("send_message",)
         )
@@ -109,12 +115,54 @@ class ExecutionBoundaryTests(unittest.TestCase):
         execution = enforce_and_execute(
             pipeline_result=result,
             action=swapped_action,
-            payload={"to": "example@example.com"},
+            payload=payload,
             executor=executor,
         )
 
         self.assertIs(result.policy.decision, Decision.ALLOW)
         self.assertIs(execution.status, ExecutionStatus.BLOCKED)
+        self.assertEqual(executor.calls, [])
+
+    def test_capability_swap_with_same_action_name_fails_closed(self):
+        evaluated_action = ActionDescriptor("lookup", ("read_data",))
+        payload = {"query": "status"}
+        result = self.evaluate(
+            risk=ContentRisk.LOW, action=evaluated_action, payload=payload
+        )
+        changed_action = ActionDescriptor("lookup", ("read_data", "network_access"))
+        executor = RecorderExecutor()
+
+        execution = enforce_and_execute(
+            pipeline_result=result,
+            action=changed_action,
+            payload=payload,
+            executor=executor,
+        )
+
+        self.assertIs(execution.status, ExecutionStatus.BLOCKED)
+        self.assertIn("descriptor changed", execution.reason)
+        self.assertEqual(executor.calls, [])
+
+    def test_payload_mutation_after_evaluation_fails_closed(self):
+        action = ActionDescriptor("read_calendar", ("read_data",))
+        evaluated_payload = {"date": "2026-09-11", "calendar": "work"}
+        result = self.evaluate(
+            risk=ContentRisk.LOW,
+            action=action,
+            payload=evaluated_payload,
+        )
+        executor = RecorderExecutor()
+
+        execution = enforce_and_execute(
+            pipeline_result=result,
+            action=action,
+            payload={"date": "2026-09-12", "calendar": "work"},
+            executor=executor,
+        )
+
+        self.assertIs(result.policy.decision, Decision.ALLOW)
+        self.assertIs(execution.status, ExecutionStatus.BLOCKED)
+        self.assertIn("payload changed", execution.reason)
         self.assertEqual(executor.calls, [])
 
 

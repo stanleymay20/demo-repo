@@ -1,8 +1,9 @@
 """Versioned policy engine for AgentShield.
 
-Detection, provenance, capability scope, authoritative tool metadata and action
-consequence are deliberately separate inputs. A detector emits risk evidence; it never
-grants authority, and an agent cannot self-declare a weaker capability set.
+Detection, provenance, capability scope, authoritative grant lifecycle, authoritative
+tool metadata and action consequence are deliberately separate inputs. A detector emits
+risk evidence; it never grants authority, and an agent cannot self-declare a weaker
+capability set or manufacture a grant.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from enum import Enum
 
 from .provenance import TrustLevel
 
-POLICY_VERSION = "agentshield-policy-v2"
+POLICY_VERSION = "agentshield-policy-v3"
 
 
 class ContentRisk(str, Enum):
@@ -40,6 +41,7 @@ class PolicyInput:
     trust_level: TrustLevel = TrustLevel.UNKNOWN
     scope_permitted: bool | None = None
     tool_verified: bool | None = None
+    grant_valid: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -50,13 +52,20 @@ class PolicyDecision:
 
 
 def decide(value: PolicyInput) -> PolicyDecision:
-    """Return the deterministic policy-v2 decision for one request."""
+    """Return the deterministic policy-v3 decision for one request."""
 
     if value.tool_verified is False:
         return PolicyDecision(
             decision=Decision.BLOCK,
             policy_version=POLICY_VERSION,
             reason="tool capability declaration is unregistered or mismatches the authoritative manifest",
+        )
+
+    if value.grant_valid is False:
+        return PolicyDecision(
+            decision=Decision.BLOCK,
+            policy_version=POLICY_VERSION,
+            reason="authorization grant is invalid, expired, revoked, consumed, or unknown to the authority",
         )
 
     if value.scope_permitted is False:
@@ -83,6 +92,13 @@ def decide(value: PolicyInput) -> PolicyDecision:
             reason="authoritative tool verification is missing or indeterminate",
         )
 
+    if value.grant_valid is None:
+        return PolicyDecision(
+            decision=Decision.REVIEW,
+            policy_version=POLICY_VERSION,
+            reason="authoritative grant verification is missing or indeterminate",
+        )
+
     if value.scope_permitted is None:
         return PolicyDecision(
             decision=Decision.REVIEW,
@@ -104,7 +120,7 @@ def decide(value: PolicyInput) -> PolicyDecision:
         return PolicyDecision(
             decision=Decision.ALLOW,
             policy_version=POLICY_VERSION,
-            reason="low content risk, verified tool, known provenance and an in-scope normal action",
+            reason="low content risk, verified tool, live grant, known provenance and an in-scope normal action",
         )
 
     return PolicyDecision(

@@ -38,14 +38,15 @@ This ledger records experiments on branch `agentshield-high-recall-research`. It
 - `protectai/deberta-v3-base-prompt-injection-v2`: binary; config explicitly maps `0=SAFE`, `1=INJECTION`. Scientifically usable.
 
 ## E03 — verified ProtectAI specialist
-- Script: `agentshield/high_recall_protectai_v1.py`
-- Workflow run: `34572666744`.
-- Head SHA: `0cabefb31780b09ed09d4b2ee82d1927bdc399f4`.
-- Status: in progress at last check.
-- Runtime asserts semantic labels before scoring and uses softmax probability for the verified `INJECTION` class.
+- Script: `agentshield/high_recall_protectai_v1.py`.
+- Initial run: `34572666744` at SHA `0cabefb31780b09ed09d4b2ee82d1927bdc399f4`.
+- Initial result: **no performance result produced**. The model labels were correctly verified (`0=SAFE`, `1=INJECTION`), but execution stopped before validation scoring because Transformers 5.x `DebertaV2Tokenizer` does not expose `prepare_for_model`.
+- Repair: commit `9cecaf999e6e6b40bda50984840e9871174c3319` manually constructs CLS/SEP inputs, pins and records the exact Hugging Face model revision, and records dataset fingerprints.
+- CI hardening: commit `9ec122e6907f57e2d4adf6b3a9a218cc6f7b8c14` adds `set -o pipefail` so Python failures cannot be hidden by `tee`, and installs CPU-only PyTorch on the CPU runner.
+- Controlled rerun: `34573086538`.
+- Status: in progress at last check; result pending.
 - Validation chooses document aggregation (`first`, `max`, or `top2mean`) and threshold; audit remains one-shot.
 - BrowseSafe benchmark labels accessed: no.
-- Result: pending.
 
 ## Promotion gates
 50%, 70%, 85%, 90%, 95%, 99%, and 99.9% recall are descriptive milestones only. Every gate also requires observed FPR <=1% on the relevant frozen audit/holdout and clean integrity checks.

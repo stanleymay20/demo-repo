@@ -48,11 +48,24 @@ This ledger records experiments on branch `agentshield-high-recall-research`. It
 - Initial run: `34572666744` at SHA `0cabefb31780b09ed09d4b2ee82d1927bdc399f4`.
 - Initial result: **no performance result produced**. The model labels were correctly verified (`0=SAFE`, `1=INJECTION`), but execution stopped before validation scoring because Transformers 5.x `DebertaV2Tokenizer` does not expose `prepare_for_model`.
 - Repair: commit `9cecaf999e6e6b40bda50984840e9871174c3319` manually constructs CLS/SEP inputs, pins and records the exact Hugging Face model revision, and records dataset fingerprints.
-- CI hardening: commit `9ec122e6907f57e2d4adf6b3a9a218cc6f7b8c14` adds `set -o pipefail` so Python failures cannot be hidden by `tee`, and installs CPU-only PyTorch on the CPU runner.
+- CI hardening / controlled execution commit: `9ec122e6907f57e2d4adf6b3a9a218cc6f7b8c14`; adds `set -o pipefail` so Python failures cannot be hidden by `tee`, and installs CPU-only PyTorch on the CPU runner.
 - Controlled rerun: `34573086538`.
-- Status: in progress at last check; result pending.
-- Validation chooses document aggregation (`first`, `max`, or `top2mean`) and threshold; audit remains one-shot.
-- BrowseSafe benchmark labels accessed: no.
+- Workflow status: **completed successfully** on 2026-09-11; this means the experiment executed and evidence uploaded successfully, not that a performance gate passed.
+- Model: `protectai/deberta-v3-base-prompt-injection-v2`, pinned revision `90c9989b1a342275dd0d1a95aad283c04e075671`.
+- Verified labels: `0=SAFE`, `1=INJECTION`; injection index 1.
+- Seed: 42. Window: 480 tokens. Maximum chunks per document: 3.
+- Dataset fingerprints: train `596f8fb7871901b9`; benchmark/test content `9a9a7f691f87832e`.
+- Data hygiene: 1 internal duplicate and 1 exact normalized train/benchmark content overlap removed. BrowseSafe benchmark **labels were never accessed**.
+- Validation/audit sizes: 1656 / 1656.
+- Validation aggregation search: `first`, `max`, `top2mean`; threshold selected on validation only under observed FPR <=1%.
+- Validation winner: `max`, frozen threshold `0.9999947547912598`; recall **7.917%** at observed FPR **0.958%**, precision 89.04%, F1 0.1454, ROC-AUC 0.5926 (65 TP, 756 FN, 8 FP, 827 TN).
+- Frozen-threshold internal audit: recall **5.603%** at observed FPR **0.838%**, precision 86.79%, F1 0.1053, ROC-AUC 0.5486 (46 TP, 775 FN, 7 FP, 828 TN).
+- Audit recall 95% Wilson CI: **4.227–7.393%**. Audit FPR 95% Wilson CI: **0.407–1.720%**.
+- Gate A (>=50% recall AND observed FPR <=1% on audit): **FAIL** because audit recall is only 5.603%. Gates B–D also fail. No threshold retuning is permitted after seeing the audit.
+- Document-length evidence: validation median 9,414.5 tokens, p95 32,168.75; audit median 9,912.5 tokens, p95 33,777.25. About 94% of both validation and audit documents exceed a single 480-token window, while the experiment samples at most three chunks. This is a plausible failure-mode hypothesis, not a proven root cause; model/domain mismatch and aggregation limitations remain alternative explanations.
+- Evidence artifact: ID `10192583016`, name `agentshield-high-recall-protectai-v1-evidence`, GitHub artifact SHA-256 `b4834183129c2aa67dd6b91c88fc2b2c68e2bb2dcbf2305a9f6f17d2afad2f91`. Independent download verification produced the same ZIP SHA-256.
+- Preserved evidence-file SHA-256 values: log `797b9d388b68167378d87dc38ca8de1d4deb052a474d8c33658752ad92dec40f`; evidence JSON `1319c4bd99daa0347f52a13008e23e36e54bb449217b7749d06f1ed75c93e68a`; validation CSV `4bef29ed65088b43365fce379bab271b0f179962d563f31b241306193c8cecae`.
+- Interpretation: **valid negative result**. The verified off-the-shelf ProtectAI specialist is substantially worse than E01 on this evaluation regime and is not promoted. The failure is preserved as evidence and must inform, not be hidden from, the next experiment.
 
 ## Promotion gates
 50%, 70%, 85%, 90%, 95%, 99%, and 99.9% recall are descriptive milestones only. Every gate also requires observed FPR <=1% on the relevant frozen audit/holdout and clean integrity checks.

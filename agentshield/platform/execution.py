@@ -1,8 +1,8 @@
 """Fail-closed execution boundary for AgentShield.
 
 The policy decision is not advisory: side effects are dispatched only after an ALLOW
-decision whose action, payload, least-privilege grant and authoritative tool manifest
-still match evaluation.
+decision whose action, payload, authoritative grant and authoritative tool manifest
+still match evaluation. Single-use grants are consumed before dispatch.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from typing import Any, Mapping, Protocol
 
 from .actions import ActionDescriptor, classify_action
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
+from .grants import GrantAuthority, GrantStatus, grant_record_digest
 from .integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
 from .pipeline import PipelineResult
 from .policy import Decision
@@ -45,8 +46,9 @@ def enforce_and_execute(
     executor: ToolExecutor,
     authorization_scope: AuthorizationScope | None = None,
     tool_registry: ToolRegistry | None = None,
+    grant_authority: GrantAuthority | None = None,
 ) -> ExecutionResult:
-    """Dispatch a tool call only when the evaluated request remains ALLOW-safe."""
+    """Dispatch a tool call only when evaluated authority remains valid and unspent."""
 
     decision = pipeline_result.policy.decision
     event = pipeline_result.audit_event
@@ -56,6 +58,7 @@ def enforce_and_execute(
     recorded_payload_digest = metadata.get("payload_digest")
     recorded_grant_id = metadata.get("authorization_grant_id")
     recorded_scope_digest = metadata.get("authorization_scope_digest")
+    recorded_grant_record_digest = metadata.get("grant_record_digest")
     recorded_tool_manifest_digest = metadata.get("tool_manifest_digest")
     current_action_risk = classify_action(action).value
 
@@ -136,6 +139,31 @@ def enforce_and_execute(
             reason="action is no longer permitted by the authorization scope",
         )
 
+    if grant_authority is None:
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="authoritative grant registry missing at execution",
+        )
+
+    grant_status, grant_record = grant_authority.verify(authorization_scope)
+    if grant_status is not GrantStatus.VALID or grant_record is None:
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason=f"authorization grant is not executable: {grant_status.value}",
+        )
+
+    if (
+        not recorded_grant_record_digest
+        or recorded_grant_record_digest != grant_record_digest(grant_record)
+    ):
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="authoritative grant record changed after policy evaluation",
+        )
+
     if event.action_risk != current_action_risk:
         return ExecutionResult(
             status=ExecutionStatus.BLOCKED,
@@ -171,10 +199,18 @@ def enforce_and_execute(
             reason="unknown policy decision failed closed",
         )
 
+    consume_status, _ = grant_authority.consume(authorization_scope)
+    if consume_status is not GrantStatus.VALID:
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason=f"authorization grant could not be consumed: {consume_status.value}",
+        )
+
     output = executor.execute(action_name=action.name, payload=payload)
     return ExecutionResult(
         status=ExecutionStatus.EXECUTED,
         decision=decision,
-        reason="policy allowed action and all execution integrity checks passed",
+        reason="policy allowed action; grant consumed and all execution integrity checks passed",
         output=output,
     )

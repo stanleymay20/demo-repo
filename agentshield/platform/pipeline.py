@@ -1,8 +1,8 @@
 """Composable AgentShield decision pipeline.
 
-Detector scoring, provenance, capability authorization, authoritative tool manifests,
-action classification, policy and audit are separate so that no model output becomes
-authorization by accident.
+Detector scoring, provenance, capability authorization, authoritative grant lifecycle,
+authoritative tool manifests, action classification, policy and audit are separate so
+that no model output becomes authorization by accident.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from .actions import ActionDescriptor, classify_action
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
 from .detectors import DetectionResult, Detector
 from .events import AuditEvent, build_audit_event
+from .grants import GrantAuthority, GrantStatus, grant_record_digest
 from .integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
 from .policy import PolicyDecision, PolicyInput, decide
 from .provenance import InputProvenance, TrustLevel
@@ -38,8 +39,9 @@ def evaluate_request(
     provenance: InputProvenance | None = None,
     authorization_scope: AuthorizationScope | None = None,
     tool_registry: ToolRegistry | None = None,
+    grant_authority: GrantAuthority | None = None,
 ) -> PipelineResult:
-    """Evaluate one proposed action against risk, scope and authoritative tool metadata."""
+    """Evaluate one proposed action against risk, authority, scope and tool metadata."""
 
     if provenance is None:
         provenance = InputProvenance(
@@ -70,6 +72,15 @@ def evaluate_request(
         else None
     )
 
+    grant_status = GrantStatus.UNKNOWN
+    grant_record = None
+    grant_valid: bool | None = None
+    if authorization_scope is not None and grant_authority is not None:
+        grant_status, grant_record = grant_authority.verify(authorization_scope)
+        grant_valid = grant_status is GrantStatus.VALID
+    elif authorization_scope is not None and grant_authority is None:
+        grant_valid = None
+
     policy_decision = decide(
         PolicyInput(
             content_risk=detection.content_risk,
@@ -77,6 +88,7 @@ def evaluate_request(
             trust_level=provenance.trust_level,
             scope_permitted=scope_permitted,
             tool_verified=tool_verified,
+            grant_valid=grant_valid,
         )
     )
 
@@ -86,6 +98,7 @@ def evaluate_request(
         "payload_digest": payload_digest(payload),
         "provenance_trust": provenance.trust_level.value,
         "scope_status": scope_status.value,
+        "grant_status": grant_status.value,
         "tool_status": tool_status.value,
     }
     if authorization_scope is not None:
@@ -93,6 +106,14 @@ def evaluate_request(
             {
                 "authorization_grant_id": authorization_scope.grant_id,
                 "authorization_scope_digest": scope_digest(authorization_scope),
+            }
+        )
+    if grant_record is not None:
+        metadata.update(
+            {
+                "grant_record_digest": grant_record_digest(grant_record),
+                "grant_expires_at_utc": grant_record.expires_at_utc.isoformat(),
+                "grant_single_use": grant_record.single_use,
             }
         )
     if manifest is not None:

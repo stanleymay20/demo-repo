@@ -31,5 +31,21 @@ This ledger records experiments on branch `agentshield-high-recall-research`. It
 - Verified config: `num_labels=17`, `problem_type=multi_label_classification`, tokenizer max length `8192`.
 - Consequence: the original E02 script's use of `logits[:,0]` cannot be treated as a prompt-injection probability without authoritative label semantics. Any output from E02 is quarantined as methodologically invalid.
 
+## Candidate configuration audit
+- Run: `34572477725`.
+- `siberiancat/modernbert-prompt-injection`: binary, but generic `LABEL_0/LABEL_1`; semantics not sufficiently explicit for scoring without an authoritative mapping.
+- `patronus-studio/wolf-defender-prompt-injection`: binary; config explicitly maps `0=benign`, `1=injection`; tokenizer max length 8192. Scientifically usable.
+- `protectai/deberta-v3-base-prompt-injection-v2`: binary; config explicitly maps `0=SAFE`, `1=INJECTION`. Scientifically usable.
+
+## E03 — verified ProtectAI specialist
+- Script: `agentshield/high_recall_protectai_v1.py`
+- Workflow run: `34572666744`.
+- Head SHA: `0cabefb31780b09ed09d4b2ee82d1927bdc399f4`.
+- Status: in progress at last check.
+- Runtime asserts semantic labels before scoring and uses softmax probability for the verified `INJECTION` class.
+- Validation chooses document aggregation (`first`, `max`, or `top2mean`) and threshold; audit remains one-shot.
+- BrowseSafe benchmark labels accessed: no.
+- Result: pending.
+
 ## Promotion gates
 50%, 70%, 85%, 90%, 95%, 99%, and 99.9% recall are descriptive milestones only. Every gate also requires observed FPR <=1% on the relevant frozen audit/holdout and clean integrity checks.

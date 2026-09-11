@@ -3,6 +3,7 @@
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
 from .policy import ActionRisk, ContentRisk, Decision, PolicyInput, decide
 from .provenance import InputProvenance, TrustLevel
+from .tools import ToolManifest, ToolRegistry, ToolVerificationStatus
 
 __all__ = [
     "ActionRisk",
@@ -12,6 +13,9 @@ __all__ = [
     "InputProvenance",
     "PolicyInput",
     "ScopeStatus",
+    "ToolManifest",
+    "ToolRegistry",
+    "ToolVerificationStatus",
     "TrustLevel",
     "check_action_scope",
     "decide",

@@ -7,10 +7,12 @@ separate so that no model output becomes authorization by accident.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Mapping
 
 from .actions import ActionDescriptor, classify_action
 from .detectors import DetectionResult, Detector
 from .events import AuditEvent, build_audit_event
+from .integrity import action_digest, payload_digest
 from .policy import PolicyDecision, PolicyInput, decide
 
 
@@ -28,6 +30,7 @@ def evaluate_request(
     content: str,
     action: ActionDescriptor,
     detector: Detector,
+    payload: Mapping[str, Any] | None = None,
 ) -> PipelineResult:
     detection = detector.detect(content)
     action_risk = classify_action(action)
@@ -46,7 +49,11 @@ def evaluate_request(
         detector_name=detection.detector_name,
         detector_version=detection.detector_version,
         detector_score=detection.score,
-        metadata={"action_name": action.name},
+        metadata={
+            "action_name": action.name,
+            "action_digest": action_digest(action),
+            "payload_digest": payload_digest(payload),
+        },
     )
     return PipelineResult(
         detection=detection,

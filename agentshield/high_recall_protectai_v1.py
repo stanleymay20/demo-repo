@@ -7,6 +7,7 @@ Scientific controls:
 - Validation chooses aggregation + threshold.
 - Internal audit is scored once after freeze.
 - Runtime asserts the model's SAFE/INJECTION label semantics before scoring.
+- Exact external model revision is recorded in the evidence file.
 """
 import hashlib, json, math, os, re, time, warnings
 import numpy as np
@@ -14,6 +15,7 @@ import pandas as pd
 import torch
 from bs4 import BeautifulSoup, Comment
 from datasets import load_dataset
+from huggingface_hub import model_info
 from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score, roc_auc_score, roc_curve
 from sklearn.model_selection import train_test_split
 from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
@@ -74,6 +76,19 @@ def make_starts(n,w):
     k=min(MAX_CHUNKS,max(2,math.ceil(n/w)))
     return sorted(set(np.linspace(0,max(0,n-w),k,dtype=int).tolist()))
 
+def encode_chunks(tok, chunks):
+    """Build DeBERTa input batches without relying on tokenizer.prepare_for_model.
+
+    Transformers 5.x DebertaV2Tokenizer no longer exposes prepare_for_model, so
+    special tokens are added explicitly using the tokenizer's verified CLS/SEP ids.
+    """
+    assert tok.cls_token_id is not None and tok.sep_token_id is not None
+    feats=[]
+    for x in chunks:
+        ids=[tok.cls_token_id]+list(x)+[tok.sep_token_id]
+        feats.append({"input_ids":ids,"attention_mask":[1]*len(ids)})
+    return tok.pad(feats,padding=True,return_tensors="pt")
+
 def score_docs(raws,tok,model,inj_idx,window):
     doc_probs=[]; chunk_counts=[]; token_counts=[]; t0=time.time()
     for start in range(0,len(raws),64):
@@ -86,8 +101,7 @@ def score_docs(raws,tok,model,inj_idx,window):
                 chunk_ids.append(ids[s:s+window]); owners.append(j)
         probs=[]
         for b in range(0,len(chunk_ids),BATCH):
-            feats=[tok.prepare_for_model(x,add_special_tokens=True,truncation=True,max_length=window+8,return_attention_mask=True) for x in chunk_ids[b:b+BATCH]]
-            batch=tok.pad(feats,padding=True,return_tensors="pt")
+            batch=encode_chunks(tok,chunk_ids[b:b+BATCH])
             with torch.inference_mode():
                 logits=model(**batch).logits
                 q=torch.softmax(logits,dim=-1)[:,inj_idx].cpu().numpy()
@@ -107,7 +121,8 @@ def score_docs(raws,tok,model,inj_idx,window):
 
 def main():
     os.makedirs("agentshield/results",exist_ok=True)
-    cfg=AutoConfig.from_pretrained(MODEL_ID)
+    revision=model_info(MODEL_ID).sha
+    cfg=AutoConfig.from_pretrained(MODEL_ID,revision=revision)
     labels={int(k):str(v).upper() for k,v in cfg.id2label.items()}
     assert cfg.num_labels==2, labels
     inj=[i for i,v in labels.items() if v=="INJECTION"]
@@ -116,19 +131,22 @@ def main():
     inj_idx=inj[0]
     maxpos=int(getattr(cfg,"max_position_embeddings",512))
     window=max(128,min(480,maxpos-8))
+    print("MODEL REVISION",revision)
     print("VERIFIED MODEL LABELS",labels,"injection_idx",inj_idx,"max_position_embeddings",maxpos,"window",window)
 
     ds=load_dataset("perplexity-ai/browsesafe-bench",token=False); train,test=ds["train"],ds["test"]
+    train_fp=str(getattr(train,"_fingerprint","unknown")); test_fp=str(getattr(test,"_fingerprint","unknown"))
     train,dups,overlap=clean_train(train,test)
     y=np.array([LAB[x] for x in train["label"]],dtype=np.int8); idx=np.arange(len(train))
     work,ia=train_test_split(idx,test_size=.15,stratify=y,random_state=SEED)
     _,iv=train_test_split(work,test_size=.1764706,stratify=y[work],random_state=SEED)
     val=train.select([int(i) for i in iv]); audit=train.select([int(i) for i in ia])
     yv=np.array([LAB[x] for x in val["label"]],dtype=np.int8); ya=np.array([LAB[x] for x in audit["label"]],dtype=np.int8)
+    print("DATASET FINGERPRINTS",train_fp,test_fp)
     print("Validation / audit",len(val),len(audit),"removed dups/overlap",dups,overlap)
 
-    tok=AutoTokenizer.from_pretrained(MODEL_ID)
-    model=AutoModelForSequenceClassification.from_pretrained(MODEL_ID); model.eval()
+    tok=AutoTokenizer.from_pretrained(MODEL_ID,revision=revision)
+    model=AutoModelForSequenceClassification.from_pretrained(MODEL_ID,revision=revision); model.eval()
     pv,vm=score_docs(val["content"],tok,model,inj_idx,window); print("VAL META",json.dumps(vm,indent=2))
     rows=[]
     for agg,p in pv.items():
@@ -142,7 +160,8 @@ def main():
     am=metrics(ya,pa[agg],th); am["recall_ci95"]=wilson(am["tp"],am["tp"]+am["fn"]); am["fpr_ci95"]=wilson(am["fp"],am["fp"]+am["tn"])
     print("AUDIT RESULT",json.dumps(am,indent=2))
     evidence={"protocol":"verified binary external detector; validation chooses aggregation+threshold; audit one-shot; benchmark labels never accessed",
-      "model_id":MODEL_ID,"label_map":labels,"injection_idx":inj_idx,"seed":SEED,"window":window,"max_chunks":MAX_CHUNKS,
+      "model_id":MODEL_ID,"model_revision":revision,"label_map":labels,"injection_idx":inj_idx,"seed":SEED,"window":window,"max_chunks":MAX_CHUNKS,
+      "dataset_train_fingerprint":train_fp,"dataset_test_fingerprint":test_fp,
       "removed_internal_duplicates":dups,"removed_train_benchmark_overlap":overlap,"validation_meta":vm,"audit_meta":ameta,
       "validation_winner":winner,"audit":am,
       "gate_A_50":bool(am["recall"]>=.50 and am["fpr"]<=.01),"gate_B_70":bool(am["recall"]>=.70 and am["fpr"]<=.01),

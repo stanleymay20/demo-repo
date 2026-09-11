@@ -1,7 +1,7 @@
 """Fail-closed execution boundary for AgentShield.
 
-The policy decision is not advisory: sensitive side effects are only dispatched after
-an ALLOW decision whose action metadata still matches the evaluated request.
+The policy decision is not advisory: side effects are dispatched only after an ALLOW
+decision whose action metadata and payload still match the evaluated request.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from enum import Enum
 from typing import Any, Mapping, Protocol
 
 from .actions import ActionDescriptor, classify_action
+from .integrity import action_digest, payload_digest
 from .pipeline import PipelineResult
 from .policy import Decision
 
@@ -43,13 +44,15 @@ def enforce_and_execute(
     """Dispatch a tool call only when the evaluated request remains ALLOW-safe.
 
     Integrity mismatches fail closed. REVIEW and BLOCK never reach the executor.
-    Raw untrusted content is not required at this boundary.
+    Raw untrusted content or raw authorization payload values are not persisted here.
     """
 
     decision = pipeline_result.policy.decision
     event = pipeline_result.audit_event
     metadata = event.metadata or {}
     recorded_action = metadata.get("action_name")
+    recorded_action_digest = metadata.get("action_digest")
+    recorded_payload_digest = metadata.get("payload_digest")
     current_action_risk = classify_action(action).value
 
     if recorded_action != action.name:
@@ -57,6 +60,20 @@ def enforce_and_execute(
             status=ExecutionStatus.BLOCKED,
             decision=decision,
             reason="action identity changed after policy evaluation",
+        )
+
+    if not recorded_action_digest or recorded_action_digest != action_digest(action):
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="action descriptor changed after policy evaluation",
+        )
+
+    if not recorded_payload_digest or recorded_payload_digest != payload_digest(payload):
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="action payload changed after policy evaluation",
         )
 
     if event.action_risk != current_action_risk:

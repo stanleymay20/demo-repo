@@ -352,9 +352,25 @@ def main():
         "timing": {"frame_dev_val_s": frame_seconds, "audit_representation_scoring_s": audit_seconds},
         "runtime": {"python": sys.version, "platform": platform.platform()},
     }
+    def json_safe(value):
+        if isinstance(value, dict):
+            return {k: json_safe(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [json_safe(v) for v in value]
+        if isinstance(value, tuple):
+            return [json_safe(v) for v in value]
+        if isinstance(value, (float, np.floating)) and not np.isfinite(value):
+            return None
+        if isinstance(value, np.integer):
+            return int(value)
+        if isinstance(value, np.floating):
+            return float(value)
+        return value
+
+    evidence = json_safe(evidence)
     with open(RESULT_DIR / "assessment_v17_evidence.json", "w") as f:
         json.dump(evidence, f, indent=2, allow_nan=False)
-    print("V17 EVIDENCE", json.dumps(evidence, indent=2), flush=True)
+    print("V17 EVIDENCE", json.dumps(evidence, indent=2, allow_nan=False), flush=True)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,72 @@
+name: AgentShield Assessment v16 Hard Rescue
+
+on:
+  push:
+    branches:
+      - agentshield-assessment-v16-hard-rescue
+    paths:
+      - 'agentshield/assessment_v16_hard_rescue.py'
+      - 'agentshield/ASSESSMENT_V16_HARD_RESCUE_PROTOCOL.md'
+      - '.github/workflows/agentshield-assessment-v16-hard-rescue.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install datasets pandas numpy scipy scikit-learn beautifulsoup4 lxml torch transformers huggingface_hub
+
+      - name: Validate experiment source
+        run: |
+          python -m py_compile agentshield/assessment_v16_hard_rescue.py
+          test -s agentshield/ASSESSMENT_V16_HARD_RESCUE_PROTOCOL.md
+
+      - name: Runtime manifest
+        run: |
+          mkdir -p agentshield/results
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "branch=${GITHUB_REF_NAME}"
+            python --version
+            python - <<'PY'
+          import platform, torch, sklearn, transformers, datasets
+          print('platform=' + platform.platform())
+          print('torch=' + torch.__version__)
+          print('sklearn=' + sklearn.__version__)
+          print('transformers=' + transformers.__version__)
+          print('datasets=' + datasets.__version__)
+          PY
+          } | tee agentshield/results/assessment_v16_runtime_manifest.txt
+
+      - name: Run controlled v16 experiment
+        run: |
+          python -u agentshield/assessment_v16_hard_rescue.py 2>&1 | tee agentshield/results/assessment_v16.log
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshield-assessment-v16-evidence
+          if-no-files-found: error
+          path: |
+            agentshield/ASSESSMENT_V16_HARD_RESCUE_PROTOCOL.md
+            agentshield/assessment_v16_hard_rescue.py
+            agentshield/results/assessment_v16_runtime_manifest.txt
+            agentshield/results/assessment_v16.log
+            agentshield/results/assessment_v16_validation.csv
+            agentshield/results/assessment_v16_evidence.json

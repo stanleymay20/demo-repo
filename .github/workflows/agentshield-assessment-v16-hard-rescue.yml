@@ -31,6 +31,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install datasets pandas numpy scipy scikit-learn beautifulsoup4 lxml torch transformers huggingface_hub
 
+      - name: Repair v16 audit member parsing
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('agentshield/assessment_v16_hard_rescue.py')
+          s = p.read_text()
+          old = '''        members = str(winner["members"]).split("|")
+                  thresholds = winner["thresholds"]'''
+          new = '''        thresholds = winner["thresholds"]
+                  # Model identifiers can contain '|'; threshold keys are canonical.
+                  members = list(thresholds.keys())'''
+          if old not in s:
+              raise SystemExit('expected v16 audit parsing block not found')
+          p.write_text(s.replace(old, new))
+          PY
+
       - name: Validate experiment source
         run: |
           python -m py_compile agentshield/assessment_v16_hard_rescue.py
@@ -54,7 +70,9 @@ jobs:
           } | tee agentshield/results/assessment_v16_runtime_manifest.txt
 
       - name: Run controlled v16 experiment
+        shell: bash
         run: |
+          set -o pipefail
           python -u agentshield/assessment_v16_hard_rescue.py 2>&1 | tee agentshield/results/assessment_v16.log
 
       - name: Upload evidence

@@ -1,0 +1,75 @@
+name: AgentShield Assessment v17 OOF Adversarial
+
+on:
+  push:
+    branches:
+      - agentshield-assessment-v17-oof-adversarial
+    paths:
+      - 'agentshield/assessment_v17_oof_adversarial.py'
+      - 'agentshield/ASSESSMENT_V17_OOF_ADVERSARIAL_PROTOCOL.md'
+      - '.github/workflows/agentshield-assessment-v17-oof-adversarial.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install datasets pandas numpy scipy scikit-learn beautifulsoup4 lxml torch transformers huggingface_hub
+
+      - name: Validate experiment source
+        run: |
+          python -m py_compile agentshield/assessment_v17_oof_adversarial.py
+          test -s agentshield/ASSESSMENT_V17_OOF_ADVERSARIAL_PROTOCOL.md
+          test -s agentshield/assessment_v16_hard_rescue.py
+
+      - name: Runtime manifest
+        run: |
+          mkdir -p agentshield/results
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "branch=${GITHUB_REF_NAME}"
+            python --version
+            python - <<'PY'
+          import platform, sklearn, datasets
+          print('platform=' + platform.platform())
+          print('sklearn=' + sklearn.__version__)
+          print('datasets=' + datasets.__version__)
+          PY
+          } | tee agentshield/results/assessment_v17_runtime_manifest.txt
+
+      - name: Run controlled v17 experiment
+        shell: bash
+        run: |
+          set -o pipefail
+          python -u agentshield/assessment_v17_oof_adversarial.py 2>&1 | tee agentshield/results/assessment_v17.log
+          test -s agentshield/results/assessment_v17_validation.csv
+          test -s agentshield/results/assessment_v17_evidence.json
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshield-assessment-v17-evidence
+          if-no-files-found: error
+          path: |
+            agentshield/ASSESSMENT_V17_OOF_ADVERSARIAL_PROTOCOL.md
+            agentshield/assessment_v17_oof_adversarial.py
+            agentshield/results/assessment_v17_runtime_manifest.txt
+            agentshield/results/assessment_v17.log
+            agentshield/results/assessment_v17_validation.csv
+            agentshield/results/assessment_v17_evidence.json

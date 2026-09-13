@@ -1,0 +1,231 @@
+name: AgentShield Assessment v24 Pairwise Residual Ranking
+
+on:
+  push:
+    branches:
+      - agentshield-assessment-v24-pairwise-residual-ranking
+    paths:
+      - 'agentshield/ASSESSMENT_V24_PAIRWISE_RESIDUAL_RANKING_PROTOCOL.md'
+      - 'agentshield/assessment_v24_pairwise_residual_ranking.py'
+      - '.github/workflows/agentshield-assessment-v24-pairwise-residual-ranking.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONHASHSEED: '42'
+  TOKENIZERS_PARALLELISM: 'false'
+
+jobs:
+  residual-and-embeddings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install datasets==5.0.1 pandas==3.0.5 numpy==2.4.6 scipy==1.17.1 scikit-learn==1.9.1 beautifulsoup4==4.15.0 lxml==6.1.3 torch==2.14.0 transformers==5.17.0 huggingface_hub==1.31.0 joblib==1.6.0
+
+      - name: Validate frozen source
+        run: |
+          python -m py_compile agentshield/assessment_v24_pairwise_residual_ranking.py
+          test -s agentshield/ASSESSMENT_V24_PAIRWISE_RESIDUAL_RANKING_PROTOCOL.md
+          test -s agentshield/assessment_v16_hard_rescue.py
+          test -s agentshield/assessment_v17_oof_adversarial.py
+
+      - name: Runtime manifest
+        run: |
+          mkdir -p agentshield/results agentshield/v24_stage1
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "branch=${GITHUB_REF_NAME}"
+            python --version
+            python - <<'PY'
+          import platform, numpy, pandas, scipy, sklearn, datasets, torch, transformers, huggingface_hub
+          print('platform=' + platform.platform())
+          print('numpy=' + numpy.__version__)
+          print('pandas=' + pandas.__version__)
+          print('scipy=' + scipy.__version__)
+          print('sklearn=' + sklearn.__version__)
+          print('datasets=' + datasets.__version__)
+          print('torch=' + torch.__version__)
+          print('transformers=' + transformers.__version__)
+          print('huggingface_hub=' + huggingface_hub.__version__)
+          PY
+          } | tee agentshield/results/assessment_v24_stage1_runtime.txt
+
+      - name: Discover residuals and freeze BGE development embeddings
+        shell: bash
+        run: |
+          set -o pipefail
+          python -u agentshield/assessment_v24_pairwise_residual_ranking.py stage1 --out agentshield/v24_stage1 2>&1 | tee agentshield/results/assessment_v24_stage1.log
+          test -s agentshield/v24_stage1/MANIFEST.json
+          test -s agentshield/v24_stage1/meta.json
+          test -s agentshield/v24_stage1/dev_embeddings.npy
+          cp agentshield/results/assessment_v24_stage1_runtime.txt agentshield/v24_stage1/
+          cp agentshield/results/assessment_v24_stage1.log agentshield/v24_stage1/
+
+      - name: Upload stage-one checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshield-v24-stage1
+          if-no-files-found: warn
+          retention-days: 7
+          path: agentshield/v24_stage1/
+
+  train-pairwise-ranker:
+    needs: residual-and-embeddings
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install datasets==5.0.1 pandas==3.0.5 numpy==2.4.6 scipy==1.17.1 scikit-learn==1.9.1 beautifulsoup4==4.15.0 lxml==6.1.3 torch==2.14.0 transformers==5.17.0 huggingface_hub==1.31.0 joblib==1.6.0
+
+      - name: Validate frozen source
+        run: |
+          python -m py_compile agentshield/assessment_v24_pairwise_residual_ranking.py
+          test -s agentshield/ASSESSMENT_V24_PAIRWISE_RESIDUAL_RANKING_PROTOCOL.md
+
+      - name: Download stage-one checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: agentshield-v24-stage1
+          path: agentshield/v24_stage1
+
+      - name: Runtime manifest
+        run: |
+          mkdir -p agentshield/results agentshield/v24_stage2
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "branch=${GITHUB_REF_NAME}"
+            python --version
+            python - <<'PY'
+          import platform, torch
+          print('platform=' + platform.platform())
+          print('torch=' + torch.__version__)
+          PY
+          } | tee agentshield/results/assessment_v24_stage2_runtime.txt
+
+      - name: Train deterministic pairwise ranking head
+        shell: bash
+        run: |
+          set -o pipefail
+          python -u agentshield/assessment_v24_pairwise_residual_ranking.py stage2 --stage1 agentshield/v24_stage1 --out agentshield/v24_stage2 2>&1 | tee agentshield/results/assessment_v24_stage2.log
+          test -s agentshield/v24_stage2/MANIFEST.json
+          test -s agentshield/v24_stage2/ranker_weight.npy
+          test -s agentshield/v24_stage2/pairs.npz
+          cp agentshield/results/assessment_v24_stage2_runtime.txt agentshield/v24_stage2/
+          cp agentshield/results/assessment_v24_stage2.log agentshield/v24_stage2/
+
+      - name: Upload trained ranker checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshield-v24-stage2
+          if-no-files-found: warn
+          retention-days: 7
+          path: agentshield/v24_stage2/
+
+  select-and-audit:
+    needs: train-pairwise-ranker
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install datasets==5.0.1 pandas==3.0.5 numpy==2.4.6 scipy==1.17.1 scikit-learn==1.9.1 beautifulsoup4==4.15.0 lxml==6.1.3 torch==2.14.0 transformers==5.17.0 huggingface_hub==1.31.0 joblib==1.6.0
+
+      - name: Validate frozen source
+        run: |
+          python -m py_compile agentshield/assessment_v24_pairwise_residual_ranking.py
+          test -s agentshield/ASSESSMENT_V24_PAIRWISE_RESIDUAL_RANKING_PROTOCOL.md
+
+      - name: Download stage-one checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: agentshield-v24-stage1
+          path: agentshield/v24_stage1
+
+      - name: Download ranker checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: agentshield-v24-stage2
+          path: agentshield/v24_stage2
+
+      - name: Runtime manifest
+        run: |
+          mkdir -p agentshield/results
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "branch=${GITHUB_REF_NAME}"
+            python --version
+            python - <<'PY'
+          import platform, torch, transformers
+          print('platform=' + platform.platform())
+          print('torch=' + torch.__version__)
+          print('transformers=' + transformers.__version__)
+          PY
+          } | tee agentshield/results/assessment_v24_stage3_runtime.txt
+
+      - name: Freeze validation winner and evaluate comparative audit once
+        shell: bash
+        run: |
+          set -o pipefail
+          python -u agentshield/assessment_v24_pairwise_residual_ranking.py stage3 --stage1 agentshield/v24_stage1 --stage2 agentshield/v24_stage2 --results agentshield/results 2>&1 | tee agentshield/results/assessment_v24.log
+          test -s agentshield/results/assessment_v24_validation.csv
+          test -s agentshield/results/assessment_v24_validation_winner.json
+          test -s agentshield/results/assessment_v24_evidence.json
+          cp agentshield/v24_stage1/MANIFEST.json agentshield/results/assessment_v24_stage1_MANIFEST.json
+          cp agentshield/v24_stage1/meta.json agentshield/results/assessment_v24_stage1_meta.json
+          cp agentshield/v24_stage2/MANIFEST.json agentshield/results/assessment_v24_stage2_MANIFEST.json
+          cp agentshield/v24_stage2/meta.json agentshield/results/assessment_v24_stage2_meta.json
+
+      - name: Upload final evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshield-assessment-v24-evidence
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            agentshield/ASSESSMENT_V24_PAIRWISE_RESIDUAL_RANKING_PROTOCOL.md
+            agentshield/assessment_v24_pairwise_residual_ranking.py
+            .github/workflows/agentshield-assessment-v24-pairwise-residual-ranking.yml
+            agentshield/results/assessment_v24_stage3_runtime.txt
+            agentshield/results/assessment_v24.log
+            agentshield/results/assessment_v24_validation.csv
+            agentshield/results/assessment_v24_validation_winner.json
+            agentshield/results/assessment_v24_evidence.json
+            agentshield/results/assessment_v24_stage1_MANIFEST.json
+            agentshield/results/assessment_v24_stage1_meta.json
+            agentshield/results/assessment_v24_stage2_MANIFEST.json
+            agentshield/results/assessment_v24_stage2_meta.json

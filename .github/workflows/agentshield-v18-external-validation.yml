@@ -6,6 +6,7 @@ on:
       - agentshield-v18-external-validation
     paths:
       - 'agentshield/V18_EXTERNAL_VALIDATION_PROTOCOL.md'
+      - 'agentshield/V18_EXTERNAL_VALIDATION_INFRA_REPAIR.md'
       - 'agentshield/v18_external_validation.py'
       - '.github/workflows/agentshield-v18-external-validation.yml'
   workflow_dispatch:
@@ -14,7 +15,6 @@ permissions:
   contents: read
 
 env:
-  PYTHONHASHSEED: '42'
   TOKENIZERS_PARALLELISM: 'false'
 
 jobs:
@@ -39,6 +39,7 @@ jobs:
         run: |
           python -m py_compile agentshield/v18_external_validation.py
           test -s agentshield/V18_EXTERNAL_VALIDATION_PROTOCOL.md
+          test -s agentshield/V18_EXTERNAL_VALIDATION_INFRA_REPAIR.md
           test -s agentshield/assessment_v18_fpr_stable.py
           test -s agentshield/assessment_v17_oof_adversarial.py
           test -s agentshield/assessment_v16_hard_rescue.py
@@ -49,6 +50,7 @@ jobs:
           {
             echo "commit=${GITHUB_SHA}"
             echo "branch=${GITHUB_REF_NAME}"
+            echo "PYTHONHASHSEED=${PYTHONHASHSEED-<unset>}"
             python --version
             python - <<'PY'
           import platform, numpy, pandas, scipy, sklearn, datasets, torch, transformers, huggingface_hub
@@ -81,6 +83,7 @@ jobs:
           retention-days: 90
           path: |
             agentshield/V18_EXTERNAL_VALIDATION_PROTOCOL.md
+            agentshield/V18_EXTERNAL_VALIDATION_INFRA_REPAIR.md
             agentshield/v18_external_validation.py
             agentshield/results/v18_external_stage1/
 
@@ -122,6 +125,7 @@ jobs:
             echo "commit=${GITHUB_SHA}"
             echo "branch=${GITHUB_REF_NAME}"
             echo "stage_dir=${STAGE_DIR}"
+            echo "PYTHONHASHSEED=${PYTHONHASHSEED-<unset>}"
             python --version
           } | tee agentshield/results/v18_external_final/runtime.txt
 
@@ -141,6 +145,7 @@ jobs:
           retention-days: 90
           path: |
             agentshield/V18_EXTERNAL_VALIDATION_PROTOCOL.md
+            agentshield/V18_EXTERNAL_VALIDATION_INFRA_REPAIR.md
             agentshield/v18_external_validation.py
             .github/workflows/agentshield-v18-external-validation.yml
             agentshield/results/v18_external_final/

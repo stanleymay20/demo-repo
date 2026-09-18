@@ -106,6 +106,13 @@ Candidate grid:
 
 Hardness comes only from development OOF scores.
 
+For the hard family:
+- **hard positive** means the residual-positive mask defined above;
+- **hard benign** means the top-5% benign OOF-score mask defined above;
+- every row starts with weight 1.0;
+- residual-positive rows are multiplied by the candidate hard-positive multiplier;
+- hard-benign rows are multiplied by the candidate hard-benign multiplier.
+
 ### Adversarial family
 
 Development-only label-preserving augmentation of hard positive examples:
@@ -113,6 +120,12 @@ Development-only label-preserving augmentation of hard positive examples:
 - benign-navigation-text dilution.
 
 Candidate C in {0.5, 1.0, 2.0, 4.0}.
+
+Fixed adversarial weights:
+- original ordinary development row: 1.0;
+- original residual-positive row: 2.0;
+- original hard-benign row: 4.0;
+- every synthetic adversarial row: 1.5.
 
 The best hard-family and adversarial-family members are selected on validation under observed validation FPR <=0.6%.
 

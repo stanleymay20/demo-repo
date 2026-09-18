@@ -915,8 +915,10 @@ def stage1(out_dir: Path):
 
     adv_weights = np.ones(len(adv_dev), dtype=np.float64)
     original_n = len(dev)
-    adv_weights[:original_n][residual_positive] *= 2.0
-    adv_weights[:original_n][hard_benign] *= 4.0
+    original_weights = adv_weights[:original_n]
+    original_weights[np.asarray(residual_positive, dtype=bool)] *= 2.0
+    original_weights[np.asarray(hard_benign, dtype=bool)] *= 4.0
+    adv_weights[:original_n] = original_weights
     adv_weights[original_n:] *= 1.5
 
     adv_models = {}

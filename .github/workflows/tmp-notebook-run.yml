@@ -1,7 +1,6 @@
 name: Temporary notebook execution V3
 on:
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 jobs:
   execute:
     runs-on: ubuntu-latest

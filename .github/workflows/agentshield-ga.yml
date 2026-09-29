@@ -5,7 +5,8 @@ on:
     branches:
       - main
       - agentshield-platform-v1
-      - agentshield-ga-hardening-2026-09-29\n      - agentshield-ga-integration-2026-09-29
+      - agentshield-ga-hardening-2026-09-29
+      - agentshield-ga-integration-2026-09-29
     paths:
       - 'agentshield/platform/**'
       - 'agentshield/tests/test_platform_*.py'
@@ -127,15 +128,21 @@ jobs:
             dist/*.whl
             dist/agentshield-sbom.spdx.json
 
-  dependency-review:
-    name: Dependency review
-    if: github.event_name == 'pull_request'
+  dependency-audit:
+    name: Dependency vulnerability audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Dependency review
-        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          fail-on-severity: high
+          python-version: '3.11'
+      - name: Install runtime and audit tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[postgres]'
+          python -m pip install pip-audit==2.10.1
+      - name: Audit installed dependency graph
+        run: python -m pip_audit

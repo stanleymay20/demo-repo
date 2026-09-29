@@ -11,7 +11,7 @@ class ActionRiskTests(unittest.TestCase):
         )
         self.assertEqual(result, ActionRisk.SENSITIVE)
 
-    def test_declared_non_sensitive_capability_is_normal(self):
+    def test_declared_known_normal_capability_is_normal(self):
         result = classify_action(
             ActionDescriptor(name="text.summarize", capabilities=("transform_text",))
         )
@@ -20,6 +20,21 @@ class ActionRiskTests(unittest.TestCase):
     def test_missing_capabilities_are_unknown(self):
         result = classify_action(ActionDescriptor(name="mystery.tool"))
         self.assertEqual(result, ActionRisk.UNKNOWN)
+
+    def test_unrecognized_capability_is_unknown_not_normal(self):
+        result = classify_action(
+            ActionDescriptor(name="future.tool", capabilities=("future_capability",))
+        )
+        self.assertEqual(result, ActionRisk.UNKNOWN)
+
+    def test_sensitive_capability_dominates_unknown_capability(self):
+        result = classify_action(
+            ActionDescriptor(
+                name="hybrid.tool",
+                capabilities=("future_capability", "network_access"),
+            )
+        )
+        self.assertEqual(result, ActionRisk.SENSITIVE)
 
     def test_capabilities_normalize_deterministically(self):
         self.assertEqual(

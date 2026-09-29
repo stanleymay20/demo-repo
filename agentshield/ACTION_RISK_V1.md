@@ -1,4 +1,4 @@
-# AgentShield Action-Risk Taxonomy v1
+# AgentShield Action-Risk Taxonomy v2
 
 AgentShield separates content risk from action consequence. A low detector score does not automatically make an action safe.
 
@@ -22,8 +22,6 @@ Treat an action as sensitive when it can materially affect confidentiality, inte
 - approve, sign, submit or commit an external transaction;
 - invoke tools that can create substantial real-world side effects.
 
-## UNKNOWN
-If action consequence cannot be confidently classified, use UNKNOWN. Under policy v1, UNKNOWN never silently becomes ALLOW.
+## UNKNOWN\nThe taxonomy is closed by default: if any capability is neither explicitly NORMAL nor explicitly SENSITIVE, classify the action as UNKNOWN. Under policy v4, UNKNOWN never silently becomes ALLOW. This makes newly introduced or misspelled capability names review-safe.
 
-## Principle
-Action classification is about consequence, not wording. A request that sounds harmless can still be sensitive if the invoked tool has powerful side effects.
+## Principle\nSensitive capabilities dominate mixed declarations. Only an action whose entire capability set is explicitly NORMAL can be automatically classified NORMAL. Action classification is about consequence, not wording. A request that sounds harmless can still be sensitive if the invoked tool has powerful side effects.

@@ -111,6 +111,51 @@ class ReviewExecutionTests(unittest.TestCase):
         self.assertEqual(len(executor.calls), 1)
         self.assertEqual(self.authority.verify(self.scope)[0].value, "consumed")
 
+    def test_review_approval_rejects_multi_use_grant(self):
+        scope = AuthorizationScope(
+            "review-grant-multi",
+            ("send_message",),
+            issuer="test-user",
+        )
+        authority = GrantAuthority()
+        authority.issue(scope, ttl=timedelta(minutes=5), single_use=False)
+        pipeline = evaluate_request(
+            request_id="review-req-multi",
+            source_type="user_input",
+            content="send the approved status",
+            action=self.action,
+            detector=FixedDetector(),
+            payload=self.payload,
+            provenance=InputProvenance("user_input", trust_level=TrustLevel.TRUSTED),
+            authorization_scope=scope,
+            tool_registry=self.registry,
+            grant_authority=authority,
+        )
+        approval = self.review_authority.issue(
+            request_id=pipeline.audit_event.request_id,
+            action_digest=action_digest(self.action),
+            payload_digest=payload_digest(self.payload),
+            scope_digest=scope_digest(scope),
+            tool_manifest_digest=tool_manifest_digest(self.manifest),
+            policy_version=pipeline.policy.policy_version,
+            reviewer="human-reviewer",
+        )
+        executor = Recorder()
+        result = enforce_and_execute(
+            pipeline_result=pipeline,
+            action=self.action,
+            payload=self.payload,
+            executor=executor,
+            authorization_scope=scope,
+            tool_registry=self.registry,
+            grant_authority=authority,
+            review_approval=approval,
+            review_authority=self.review_authority,
+        )
+        self.assertIs(result.status, ExecutionStatus.BLOCKED)
+        self.assertIn("single-use", result.reason)
+        self.assertEqual(executor.calls, [])
+
     def test_approval_cannot_authorize_mutated_payload(self):
         executor = Recorder()
         approval = self.approval()

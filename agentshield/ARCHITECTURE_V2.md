@@ -1,4 +1,4 @@
-# AgentShield Platform Architecture v2
+# AgentShield Platform Architecture v3
 
 ## Purpose
 
@@ -18,9 +18,9 @@ AgentShield is a layered security boundary for AI-agent systems. Prompt-injectio
 3. **Authoritative tool registry** — server-owned `ToolManifest` defines the real capabilities of every executable tool.
 4. **Action-risk classification** — consequence class derived from the verified action descriptor.
 5. **Capability scope** — host-issued `AuthorizationScope` constrains the originating task to a least-privilege capability set.
-6. **Policy v2** — combines detector risk, provenance, tool verification, scope and action consequence into ALLOW / REVIEW / BLOCK.
+6. **Policy v4** — combines detector risk, provenance, tool verification, scope and action consequence into ALLOW / REVIEW / BLOCK.
 7. **Integrity binding** — SHA-256 binds action descriptor, payload, capability grant and tool manifest without persisting raw payload values.
-8. **Execution gate** — only a still-valid ALLOW may dispatch; REVIEW and BLOCK never execute.
+8. **Execution gate** — a still-valid ALLOW may dispatch automatically; REVIEW can dispatch only after an exact, short-lived human approval bound to a single-use grant; BLOCK never executes.
 9. **Audit evidence** — records policy version, detector identity/score, trust state, scope/tool status and integrity hashes.
 10. **System evaluation** — measures harmful-action execution separately from detector recall/FPR.
 
@@ -40,7 +40,7 @@ Automatic execution requires all of the following:
 
 Any missing or indeterminate security state fails to REVIEW or BLOCK rather than silently becoming ALLOW.
 
-## Policy v2 summary
+## Policy v4 summary
 
 | Condition | Decision |
 |---|---|
@@ -51,7 +51,7 @@ Any missing or indeterminate security state fails to REVIEW or BLOCK rather than
 | missing/indeterminate capability scope | REVIEW |
 | unknown provenance trust | REVIEW |
 | low content risk + normal action + verified tool + known provenance + in-scope grant | ALLOW |
-| other mixed/elevated state | REVIEW |
+| unrecognized capability taxonomy entry | REVIEW |\n| other mixed/elevated state | REVIEW |
 
 ## Trust-boundary rule
 
@@ -71,4 +71,4 @@ Detector evidence and system evidence remain distinct:
 
 ## Branch purpose
 
-`agentshield-platform-v1` carries the evolving platform architecture. Version labels inside the branch refer to security-contract versions, not detector experiments.
+The production runtime is consolidated through the GA integration path onto `main`. Historical platform and experiment branches remain preserved for lineage.

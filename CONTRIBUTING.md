@@ -28,4 +28,4 @@ Historical experiment scripts and evidence are preserved as evidence. Do not rew
 
 ## Pull request standard
 
-A GA-bound pull request should be mergeable only when unit tests, PostgreSQL integration, package build, CodeQL and dependency review gates are green.
+A GA-bound pull request should be mergeable only when unit tests, PostgreSQL integration, package build, CodeQL and dependency vulnerability-audit gates are green.

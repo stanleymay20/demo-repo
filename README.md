@@ -2,19 +2,19 @@
 
 **AI Agent Security & Runtime Governance**
 
-> Repository note: `demo-repo` is a legacy repository name. The rename is intentionally deferred while controlled AgentShield experiment and evidence branches remain active.
+> Repository note: `demo-repo` is a legacy repository name. Runtime code is now being consolidated onto `main` while historical experiment branches remain preserved as research evidence.
 
-AgentShield is an engineering and research project for constraining AI-agent execution **after a model proposes an action but before a tool is allowed to perform it**.
+AgentShield constrains AI-agent execution **after a model proposes an action but before a tool is allowed to perform it**.
 
-The system treats prompt-injection detection as only one layer. Authorization, provenance, capability scope, integrity binding and replay resistance are enforced separately so a model cannot gain authority merely by generating a convincing instruction.
+The system treats prompt-injection detection as only one layer. Authorization, provenance, capability scope, durable grant state, integrity binding, human review and replay resistance are enforced separately so a model cannot gain authority merely by generating a convincing instruction.
 
 ## Recruiter quick scan
 
 **Problem:** LLMs can propose actions, but model output must not be treated as authorization.
 
-**What this repository demonstrates:** AI-agent runtime governance, prompt-injection/adversarial handling, provenance checks, least-privilege capability grants, integrity binding, replay resistance, explicit ALLOW / REVIEW / BLOCK decisions and preserved negative-test evidence.
+**What this repository demonstrates:** AI-agent runtime governance, prompt-injection/adversarial handling, provenance checks, least-privilege capability grants, durable atomic replay protection, integrity binding, cryptographically bound human review, explicit ALLOW / REVIEW / BLOCK decisions, tamper-evident audit evidence and preserved negative-test evidence.
 
-**Engineering signal:** security controls are enforced outside the model, so probabilistic reasoning is separated from deterministic execution authority.
+**Engineering signal:** probabilistic model reasoning is separated from deterministic execution authority.
 
 ## Security model
 
@@ -27,57 +27,60 @@ Input & provenance checks
         ↓
 Server-owned tool manifest
         ↓
-Capability / grant validation
+Capability / durable grant validation
         ↓
 Integrity + replay checks
         ↓
 Policy decision
    ALLOW | REVIEW | BLOCK
         ↓
+If REVIEW: exact signed human approval
+        ↓
+Atomic grant consumption
+        ↓
 Constrained tool execution
+        ↓
+Tamper-evident audit envelope
 ```
 
-## Engineering areas
+## Runtime implementation
 
-- prompt-injection and adversarial-input handling;
+Production-facing primitives live under `agentshield/platform/`.
+
+Key controls include:
+
 - server-owned tool manifests;
-- least-privilege capability grants;
-- provenance and trust-boundary checks;
-- integrity binding between authorized intent and execution;
-- replay resistance and grant lifecycle controls;
-- fail-closed policy decisions;
-- adversarial scenario harnesses and preserved negative results;
-- explicit separation of **detection**, **authorization** and **execution**.
+- least-privilege authorization scopes;
+- in-memory grant authority for deterministic tests;
+- PostgreSQL-backed atomic grant authority for multi-worker deployment;
+- expiry, revocation and single-use replay resistance;
+- action/payload/scope/tool-manifest integrity binding;
+- short-lived HMAC review approvals bound to the exact held action;
+- fail-closed execution enforcement;
+- tamper-evident HMAC audit chaining with key rotation support;
+- adversarial contract scenarios and consequence-aware metrics.
 
-## Controlled implementation
+## GA quality gates
 
-The maintained platform/evidence line currently lives on:
+The GA workflow validates:
 
-**[`agentshield-platform-v1`](https://github.com/stanleymay20/demo-repo/tree/agentshield-platform-v1)**
+- Python 3.11, 3.12, 3.13 and 3.14;
+- full platform unit suite;
+- live PostgreSQL concurrency semantics;
+- wheel build/install smoke test;
+- SPDX SBOM generation;
+- dependency review;
+- CodeQL security analysis;
+- tagged-release SHA-256 manifests and build provenance.
 
-Additional research/evaluation branches are intentionally preserved while experiments are active. Their history should not be flattened or rewritten merely to make the repository look cleaner.
+See `agentshield/GA_READINESS.md`, `SECURITY.md` and `CONTRIBUTING.md`.
 
-## Why this project exists
+## Research lineage
 
-Agentic systems create a security problem that ordinary prompt filtering does not solve: even if a model understands a request, it still needs an independently enforced answer to questions such as:
+Detector research remains intentionally separate from the runtime release path. Historical experiment branches and negative results are preserved rather than flattened into production code.
 
-- Is this tool available to this actor?
-- Was this action actually authorized?
-- Is the authorization still valid?
-- Has the request been modified since approval?
-- Is the model attempting to reuse an old grant?
-- Should this action require human review?
+A passing adversarial suite is **not** a universal proof of safety. Detector metrics must stay attached to their exact frozen protocol and data. A production detector-efficacy claim still requires genuinely unseen external validation and independent adversarial reproduction.
 
-AgentShield explores those questions as enforceable runtime controls rather than relying on model self-restraint.
+## Status
 
-## Evidence discipline
-
-This repository preserves experimental lineage, including failures and negative results. Security claims should be based on the exact branch, test harness and threat model that produced the evidence.
-
-A passing adversarial suite is **not** a universal proof of safety, and the project does not claim that prompt injection can be eliminated by a single classifier or policy rule.
-
-## Portfolio status
-
-AgentShield is a flagship AI-engineering project in this portfolio, focused on **agent security, runtime governance and controlled tool execution**.
-
-Canonical repository naming and default-branch consolidation are deliberately postponed until the active controlled experiment line is frozen and verified.
+The runtime is in GA hardening. The first GA tag should not be cut until the required repository rules, security checks, license choice and external claim boundaries in `agentshield/GA_READINESS.md` are satisfied.

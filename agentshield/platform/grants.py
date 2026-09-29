@@ -17,6 +17,7 @@ from enum import Enum
 import hashlib
 import json
 import secrets
+from typing import Protocol
 
 from .authorization import AuthorizationScope
 from .integrity import scope_digest
@@ -76,6 +77,24 @@ def grant_record_digest(record: GrantRecord) -> str:
         allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+class GrantAuthorityProtocol(Protocol):
+    """Structural contract shared by in-memory and durable grant authorities."""
+
+    def verify(
+        self,
+        scope: AuthorizationScope,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[GrantStatus, GrantRecord | None]: ...
+
+    def consume(
+        self,
+        scope: AuthorizationScope,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[GrantStatus, GrantRecord | None]: ...
 
 
 class GrantAuthority:

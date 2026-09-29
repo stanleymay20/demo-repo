@@ -14,7 +14,7 @@ from typing import Any, Mapping, Protocol
 
 from .actions import ActionDescriptor, classify_action
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
-from .grants import GrantAuthority, GrantStatus, grant_record_digest
+from .grants import GrantAuthorityProtocol, GrantStatus, grant_record_digest
 from .integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
 from .pipeline import PipelineResult
 from .policy import Decision
@@ -50,7 +50,7 @@ def enforce_and_execute(
     executor: ToolExecutor,
     authorization_scope: AuthorizationScope | None = None,
     tool_registry: ToolRegistry | None = None,
-    grant_authority: GrantAuthority | Any | None = None,
+    grant_authority: GrantAuthorityProtocol | None = None,
     review_approval: ReviewApproval | None = None,
     review_authority: ReviewAuthority | None = None,
 ) -> ExecutionResult:
@@ -194,6 +194,12 @@ def enforce_and_execute(
 
     approved_review: ReviewApproval | None = None
     if decision is Decision.REVIEW:
+        if not grant_record.single_use:
+            return ExecutionResult(
+                status=ExecutionStatus.BLOCKED,
+                decision=decision,
+                reason="human-review execution requires a single-use grant",
+            )
         if review_approval is None or review_authority is None:
             return ExecutionResult(
                 status=ExecutionStatus.HELD_FOR_REVIEW,

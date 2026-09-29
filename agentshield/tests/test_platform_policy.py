@@ -11,7 +11,7 @@ from agentshield.platform.policy import (
 from agentshield.platform.provenance import TrustLevel
 
 
-class PolicyV3Tests(unittest.TestCase):
+class PolicyV4Tests(unittest.TestCase):
     def scoped(self, content_risk, action_risk, trust=TrustLevel.TRUSTED):
         return PolicyInput(
             content_risk=content_risk,
@@ -26,7 +26,7 @@ class PolicyV3Tests(unittest.TestCase):
         result = decide(self.scoped(ContentRisk.LOW, ActionRisk.NORMAL))
         self.assertEqual(result.decision, Decision.ALLOW)
         self.assertEqual(result.policy_version, POLICY_VERSION)
-        self.assertEqual(POLICY_VERSION, "agentshield-policy-v3")
+        self.assertEqual(POLICY_VERSION, "agentshield-policy-v4")
 
     def test_known_untrusted_low_normal_can_allow_when_explicitly_authorized(self):
         result = decide(

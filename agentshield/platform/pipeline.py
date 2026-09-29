@@ -14,7 +14,7 @@ from .actions import ActionDescriptor, classify_action
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
 from .detectors import DetectionResult, Detector
 from .events import AuditEvent, build_audit_event
-from .grants import GrantAuthority, GrantStatus, grant_record_digest
+from .grants import GrantAuthorityProtocol, GrantStatus, grant_record_digest
 from .integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
 from .policy import PolicyDecision, PolicyInput, decide
 from .provenance import InputProvenance, TrustLevel
@@ -39,7 +39,7 @@ def evaluate_request(
     provenance: InputProvenance | None = None,
     authorization_scope: AuthorizationScope | None = None,
     tool_registry: ToolRegistry | None = None,
-    grant_authority: GrantAuthority | None = None,
+    grant_authority: GrantAuthorityProtocol | None = None,
 ) -> PipelineResult:
     """Evaluate one proposed action against risk, authority, scope and tool metadata."""
 

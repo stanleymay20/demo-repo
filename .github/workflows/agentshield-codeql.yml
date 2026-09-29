@@ -1,0 +1,37 @@
+name: AgentShield CodeQL
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agentshield/**'
+      - 'pyproject.toml'
+      - '.github/workflows/agentshield-codeql.yml'
+  pull_request:
+    paths:
+      - 'agentshield/**'
+      - 'pyproject.toml'
+      - '.github/workflows/agentshield-codeql.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  packages: read
+  actions: read
+
+jobs:
+  analyze:
+    name: CodeQL / Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1190a975f95ce23525efb6a3fc21ea29567c1b52
+        with:
+          languages: python
+          queries: security-extended
+      - name: Analyze
+        uses: github/codeql-action/analyze@1190a975f95ce23525efb6a3fc21ea29567c1b52

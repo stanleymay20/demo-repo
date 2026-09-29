@@ -1,17 +1,27 @@
 """AgentShield layered agent-security platform primitives."""
 
+from .audit import AuditEnvelope, AuditSigner, AuditVerificationStatus
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
 from .policy import ActionRisk, ContentRisk, Decision, PolicyInput, decide
+from .postgres_grants import PostgresGrantAuthority
 from .provenance import InputProvenance, TrustLevel
+from .review import ReviewApproval, ReviewAuthority, ReviewStatus
 from .tools import ToolManifest, ToolRegistry, ToolVerificationStatus
 
 __all__ = [
     "ActionRisk",
+    "AuditEnvelope",
+    "AuditSigner",
+    "AuditVerificationStatus",
     "AuthorizationScope",
     "ContentRisk",
     "Decision",
     "InputProvenance",
     "PolicyInput",
+    "PostgresGrantAuthority",
+    "ReviewApproval",
+    "ReviewAuthority",
+    "ReviewStatus",
     "ScopeStatus",
     "ToolManifest",
     "ToolRegistry",

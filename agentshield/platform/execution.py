@@ -1,8 +1,9 @@
 """Fail-closed execution boundary for AgentShield.
 
 The policy decision is not advisory: side effects are dispatched only after an ALLOW
-decision whose action, payload, authoritative grant and authoritative tool manifest
-still match evaluation. Single-use grants are consumed before dispatch.
+decision, or after an exact REVIEW decision receives a valid cryptographically-bound
+human approval. Action, payload, grant and tool state are re-verified immediately before
+dispatch. Single-use grants are consumed before the side effect.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from .grants import GrantAuthority, GrantStatus, grant_record_digest
 from .integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
 from .pipeline import PipelineResult
 from .policy import Decision
+from .review import ReviewApproval, ReviewAuthority, ReviewStatus, review_approval_digest
 from .tools import ToolRegistry, ToolVerificationStatus, verify_action_descriptor
 
 
@@ -36,6 +38,8 @@ class ExecutionResult:
     decision: Decision
     reason: str
     output: Any | None = None
+    review_approval_id: str | None = None
+    review_approval_digest: str | None = None
 
 
 def enforce_and_execute(
@@ -46,9 +50,11 @@ def enforce_and_execute(
     executor: ToolExecutor,
     authorization_scope: AuthorizationScope | None = None,
     tool_registry: ToolRegistry | None = None,
-    grant_authority: GrantAuthority | None = None,
+    grant_authority: GrantAuthority | Any | None = None,
+    review_approval: ReviewApproval | None = None,
+    review_authority: ReviewAuthority | None = None,
 ) -> ExecutionResult:
-    """Dispatch a tool call only when evaluated authority remains valid and unspent."""
+    """Dispatch only when the evaluated authority still matches and remains valid."""
 
     decision = pipeline_result.policy.decision
     event = pipeline_result.audit_event
@@ -69,14 +75,16 @@ def enforce_and_execute(
             reason="action identity changed after policy evaluation",
         )
 
-    if not recorded_action_digest or recorded_action_digest != action_digest(action):
+    current_action_digest = action_digest(action)
+    if not recorded_action_digest or recorded_action_digest != current_action_digest:
         return ExecutionResult(
             status=ExecutionStatus.BLOCKED,
             decision=decision,
             reason="action descriptor changed after policy evaluation",
         )
 
-    if not recorded_payload_digest or recorded_payload_digest != payload_digest(payload):
+    current_payload_digest = payload_digest(payload)
+    if not recorded_payload_digest or recorded_payload_digest != current_payload_digest:
         return ExecutionResult(
             status=ExecutionStatus.BLOCKED,
             decision=decision,
@@ -98,9 +106,10 @@ def enforce_and_execute(
             reason="tool is no longer verified by the authoritative registry",
         )
 
+    current_manifest_digest = tool_manifest_digest(manifest)
     if (
         not recorded_tool_manifest_digest
-        or recorded_tool_manifest_digest != tool_manifest_digest(manifest)
+        or recorded_tool_manifest_digest != current_manifest_digest
     ):
         return ExecutionResult(
             status=ExecutionStatus.BLOCKED,
@@ -122,10 +131,8 @@ def enforce_and_execute(
             reason="authorization grant changed after policy evaluation",
         )
 
-    if (
-        not recorded_scope_digest
-        or recorded_scope_digest != scope_digest(authorization_scope)
-    ):
+    current_scope_digest = scope_digest(authorization_scope)
+    if not recorded_scope_digest or recorded_scope_digest != current_scope_digest:
         return ExecutionResult(
             status=ExecutionStatus.BLOCKED,
             decision=decision,
@@ -185,14 +192,31 @@ def enforce_and_execute(
             reason=pipeline_result.policy.reason,
         )
 
+    approved_review: ReviewApproval | None = None
     if decision is Decision.REVIEW:
-        return ExecutionResult(
-            status=ExecutionStatus.HELD_FOR_REVIEW,
-            decision=decision,
-            reason=pipeline_result.policy.reason,
+        if review_approval is None or review_authority is None:
+            return ExecutionResult(
+                status=ExecutionStatus.HELD_FOR_REVIEW,
+                decision=decision,
+                reason=pipeline_result.policy.reason,
+            )
+        review_status = review_authority.verify(
+            review_approval,
+            request_id=event.request_id,
+            action_digest=current_action_digest,
+            payload_digest=current_payload_digest,
+            scope_digest=current_scope_digest,
+            tool_manifest_digest=current_manifest_digest,
+            policy_version=pipeline_result.policy.policy_version,
         )
-
-    if decision is not Decision.ALLOW:
+        if review_status is not ReviewStatus.VALID:
+            return ExecutionResult(
+                status=ExecutionStatus.BLOCKED,
+                decision=decision,
+                reason=f"human review approval is not executable: {review_status.value}",
+            )
+        approved_review = review_approval
+    elif decision is not Decision.ALLOW:
         return ExecutionResult(
             status=ExecutionStatus.BLOCKED,
             decision=decision,
@@ -208,9 +232,20 @@ def enforce_and_execute(
         )
 
     output = executor.execute(action_name=action.name, payload=payload)
+    if approved_review is None:
+        reason = "policy allowed action; grant consumed and all execution integrity checks passed"
+        approval_id = None
+        approval_digest = None
+    else:
+        reason = "human review approved the exact held action; grant consumed and all execution integrity checks passed"
+        approval_id = approved_review.approval_id
+        approval_digest = review_approval_digest(approved_review)
+
     return ExecutionResult(
         status=ExecutionStatus.EXECUTED,
         decision=decision,
-        reason="policy allowed action; grant consumed and all execution integrity checks passed",
+        reason=reason,
         output=output,
+        review_approval_id=approval_id,
+        review_approval_digest=approval_digest,
     )

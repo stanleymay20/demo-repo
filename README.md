@@ -69,7 +69,7 @@ The GA workflow validates:
 - live PostgreSQL concurrency semantics;
 - wheel build/install smoke test;
 - SPDX SBOM generation;
-- dependency review;
+- dependency vulnerability audit;
 - CodeQL security analysis;
 - tagged-release SHA-256 manifests and build provenance.
 

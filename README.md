@@ -8,6 +8,14 @@ AgentShield is an engineering and research project for constraining AI-agent exe
 
 The system treats prompt-injection detection as only one layer. Authorization, provenance, capability scope, integrity binding and replay resistance are enforced separately so a model cannot gain authority merely by generating a convincing instruction.
 
+## Recruiter quick scan
+
+**Problem:** LLMs can propose actions, but model output must not be treated as authorization.
+
+**What this repository demonstrates:** AI-agent runtime governance, prompt-injection/adversarial handling, provenance checks, least-privilege capability grants, integrity binding, replay resistance, explicit ALLOW / REVIEW / BLOCK decisions and preserved negative-test evidence.
+
+**Engineering signal:** security controls are enforced outside the model, so probabilistic reasoning is separated from deterministic execution authority.
+
 ## Security model
 
 ```text

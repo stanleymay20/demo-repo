@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - agentshield-platform-v1
-      - agentshield-ga-hardening-2026-09-29
+      - agentshield-ga-hardening-2026-09-29\n      - agentshield-ga-integration-2026-09-29
     paths:
       - 'agentshield/platform/**'
       - 'agentshield/tests/test_platform_*.py'

@@ -17,7 +17,7 @@ class ReviewAuthorityTests(unittest.TestCase):
             payload_digest="b" * 64,
             scope_digest="c" * 64,
             tool_manifest_digest="d" * 64,
-            policy_version="agentshield-policy-v3",
+            policy_version="agentshield-policy-v4",
         )
 
     def test_valid_approval_verifies(self):

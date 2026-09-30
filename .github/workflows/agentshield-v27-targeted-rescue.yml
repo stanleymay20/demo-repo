@@ -3,7 +3,14 @@ name: AgentShield v27 Targeted Long-Context Unicode Rescue
 on:
   push:
     branches:
-      - agentshield-v27-targeted-rescue
+      - agentshield-v27-pr-eval-2026-09-30
+    paths:
+      - 'agentshield/AGENTSHIELD_V27_TARGETED_RESCUE_PROTOCOL.md'
+      - 'agentshield/agentshield_v27_targeted_rescue.py'
+      - '.github/workflows/agentshield-v27-targeted-rescue.yml'
+  pull_request:
+    branches:
+      - main
     paths:
       - 'agentshield/AGENTSHIELD_V27_TARGETED_RESCUE_PROTOCOL.md'
       - 'agentshield/agentshield_v27_targeted_rescue.py'

@@ -1,0 +1,28 @@
+name: AgentShield v27 Run Monitor
+
+on:
+  push:
+    branches:
+      - agentshield-v27-pr-eval-2026-09-30
+    paths:
+      - '.github/workflows/agentshield-v27-monitor.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  issues: write
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report latest v27 workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          DATA="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/agentshield-v27-targeted-rescue.yml/runs?branch=agentshield-v27-pr-eval-2026-09-30&per_page=5")"
+          BODY="$(python -c 'import json,sys; d=json.load(sys.stdin); rows=d.get("workflow_runs",[]); print("AgentShield v27 run monitor:\n\n"+("\n".join([f"- run_id={r.get(\"id\")} status={r.get(\"status\")} conclusion={r.get(\"conclusion\")} event={r.get(\"event\")} head_sha={r.get(\"head_sha\")}" for r in rows]) if rows else "- no matching runs found"))' <<<"$DATA")"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/8/comments" -f body="$BODY"

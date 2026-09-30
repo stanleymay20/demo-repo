@@ -25,6 +25,15 @@ env:
   PYTHONHASHSEED: '42'
 
 jobs:
+  v27-run-heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report v27 run start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/issues/8/comments" -f body="AgentShield v27 controlled rerun started at commit ${GITHUB_SHA}."
+
   freeze-validation-candidate:
     runs-on: ubuntu-latest
     timeout-minutes: 360

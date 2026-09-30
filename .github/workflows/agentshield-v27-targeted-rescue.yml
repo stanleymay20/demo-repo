@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 env:
   PYTHONHASHSEED: '42'
@@ -201,3 +202,42 @@ jobs:
             agentshield/results/v27_stage2_runtime.txt
             agentshield/results/v27_stage2.log
             agentshield/results/v27_evidence.json
+
+
+  publish-evidence:
+    needs:
+      - freeze-validation-candidate
+      - conditional-comparative-audit
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download final evidence when available
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: agentshield-v27-evidence
+          path: evidence
+
+      - name: Publish v27 evidence to issue 8
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATUS="workflow_status=${{ needs.conditional-comparative-audit.result }}"
+          FILE="$(find evidence -type f -name v27_evidence.json 2>/dev/null | head -n1 || true)"
+          if [ -n "$FILE" ]; then
+            BODY=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          p=next(Path('evidence').rglob('v27_evidence.json'))
+          data=json.loads(p.read_text())
+          keys=['version','stage','promotion_gate_passed','comparative_audit','validation_anchor','validation_winner','gates','controls']
+          slim={k:data.get(k) for k in keys if k in data}
+          print("AgentShield v27 controlled rerun completed.\n\n```json\n"+json.dumps(slim,indent=2)+"\n```")
+          PY
+          )
+          else
+            BODY="AgentShield v27 controlled rerun did not produce final evidence. ${STATUS}"
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/issues/8/comments" -f body="$BODY"

@@ -12,6 +12,8 @@ A GA release must demonstrate all of the following on the exact release commit:
 - durable atomic grant verification/consumption across workers;
 - replay, expiry and revocation enforcement;
 - action, payload, scope and manifest integrity binding;
+- detached strict-JSON payload snapshots across evaluation and dispatch, including
+  mutation-during-consumption and Python/JSON type-alias adversarial regressions;
 - cryptographically bound, short-lived human-review approval for REVIEW resumes;
 - tamper-evident audit envelopes with signing-key rotation support;
 - no raw untrusted payload persistence by default;

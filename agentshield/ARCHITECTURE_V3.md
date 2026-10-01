@@ -61,6 +61,22 @@ Any missing or indeterminate security state fails to REVIEW or BLOCK rather than
 
 The execution gate re-verifies the live action descriptor, payload, grant and tool manifest against the audit-bound hashes. A post-authorization mutation is a blocked request, not a reason to silently re-authorize.
 
+Payload binding uses a detached, strict JSON object captured before detector or
+authority callbacks. Dispatch uses a separate private snapshot whose digest was
+checked, so mutation of the caller's original dictionary or nested lists during
+grant consumption cannot alter the executed effect. Invalid execution payloads
+return BLOCKED without consuming the grant. Objects must have string keys; values
+must be plain dict/list/string/boolean/integer/finite-float/null, with at most 64
+nested levels. Tuples and custom Python subclasses are rejected rather than
+silently coerced. Integrators must convert their own data to this contract before
+evaluation. Invalid evaluation input raises ValueError before detector invocation.
+
+These hashes bind the submitted payload to dispatch; they do not establish that
+every resource named inside a payload is authorized. Host integrations must enforce
+tenant, resource, recipient, path, network destination and executor semantics.
+PipelineResult, registries, authorities, review keys and executors must stay outside
+the untrusted agent's control. This library alone is not process or OS isolation.
+
 ## Evaluation separation
 
 Detector evidence and system evidence remain distinct:

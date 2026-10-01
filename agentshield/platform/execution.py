@@ -15,7 +15,9 @@ from typing import Any, Mapping, Protocol
 from .actions import ActionDescriptor, classify_action
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
 from .grants import GrantAuthorityProtocol, GrantStatus, grant_record_digest
-from .integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
+from .integrity import (
+    action_digest, payload_digest, scope_digest, snapshot_payload, tool_manifest_digest,
+)
 from .pipeline import PipelineResult
 from .policy import Decision
 from .review import ReviewApproval, ReviewAuthority, ReviewStatus, review_approval_digest
@@ -57,6 +59,17 @@ def enforce_and_execute(
     """Dispatch only when the evaluated authority still matches and remains valid."""
 
     decision = pipeline_result.policy.decision
+    try:
+        # A private deep snapshot closes the check/dispatch mutation window.
+        # Never pass the original mapping or nested caller-owned values onward.
+        execution_payload = snapshot_payload(payload)
+        current_payload_digest = payload_digest(execution_payload)
+    except ValueError:
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="action payload is not a valid canonical JSON object",
+        )
     event = pipeline_result.audit_event
     metadata = event.metadata or {}
     recorded_action = metadata.get("action_name")
@@ -83,7 +96,6 @@ def enforce_and_execute(
             reason="action descriptor changed after policy evaluation",
         )
 
-    current_payload_digest = payload_digest(payload)
     if not recorded_payload_digest or recorded_payload_digest != current_payload_digest:
         return ExecutionResult(
             status=ExecutionStatus.BLOCKED,
@@ -237,7 +249,7 @@ def enforce_and_execute(
             reason=f"authorization grant could not be consumed: {consume_status.value}",
         )
 
-    output = executor.execute(action_name=action.name, payload=payload)
+    output = executor.execute(action_name=action.name, payload=execution_payload)
     if approved_review is None:
         reason = "policy allowed action; grant consumed and all execution integrity checks passed"
         approval_id = None

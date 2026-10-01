@@ -43,6 +43,10 @@ def evaluate_request(
 ) -> PipelineResult:
     """Evaluate one proposed action against risk, authority, scope and tool metadata."""
 
+    # Bind the submitted effect before any detector/authority callback can change
+    # caller-owned payload state. Invalid payloads never reach those callbacks.
+    submitted_payload_digest = payload_digest(payload)
+
     if provenance is None:
         provenance = InputProvenance(
             source_type=source_type,
@@ -95,7 +99,7 @@ def evaluate_request(
     metadata: dict[str, Any] = {
         "action_name": action.name,
         "action_digest": action_digest(action),
-        "payload_digest": payload_digest(payload),
+        "payload_digest": submitted_payload_digest,
         "provenance_trust": provenance.trust_level.value,
         "scope_status": scope_status.value,
         "grant_status": grant_status.value,

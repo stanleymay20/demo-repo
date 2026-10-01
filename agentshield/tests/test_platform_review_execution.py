@@ -174,6 +174,25 @@ class ReviewExecutionTests(unittest.TestCase):
         self.assertIn("payload changed", result.reason)
         self.assertEqual(executor.calls, [])
 
+    def test_approved_recipient_snapshot_survives_mutation_during_consumption(self):
+        executor = Recorder()
+        approval = self.approval()
+        consume = self.authority.consume
+
+        def mutate_recipient(scope, **kwargs):
+            self.payload["to"] = "attacker@example"
+            return consume(scope, **kwargs)
+
+        self.authority.consume = mutate_recipient
+        result = enforce_and_execute(
+            pipeline_result=self.pipeline, action=self.action, payload=self.payload,
+            executor=executor, authorization_scope=self.scope, tool_registry=self.registry,
+            grant_authority=self.authority, review_approval=approval,
+            review_authority=self.review_authority,
+        )
+        self.assertIs(result.status, ExecutionStatus.EXECUTED)
+        self.assertEqual(executor.calls, [("mail.send", {"to": "approved@example", "body": "status"})])
+
 
 if __name__ == "__main__":
     unittest.main()

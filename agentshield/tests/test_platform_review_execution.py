@@ -4,6 +4,7 @@ from datetime import timedelta
 from agentshield.platform.actions import ActionDescriptor
 from agentshield.platform.authorization import AuthorizationScope
 from agentshield.platform.detectors import DetectionResult
+from agentshield.platform.effects import effect_digest
 from agentshield.platform.execution import ExecutionStatus, enforce_and_execute
 from agentshield.platform.grants import GrantAuthority
 from agentshield.platform.integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
@@ -40,14 +41,16 @@ class ReviewExecutionTests(unittest.TestCase):
     def setUp(self):
         self.action = ActionDescriptor("mail.send", ("send_message",))
         self.payload = {"to": "approved@example", "body": "status"}
+        self.manifest = ToolManifest("mail.send", ("send_message",), version="1")
         self.scope = AuthorizationScope(
             "review-grant-1",
             ("send_message",),
             issuer="test-user",
+            allowed_effects=(effect_digest(action=self.action, payload=self.payload,
+                manifest=self.manifest),),
         )
         self.authority = GrantAuthority()
         self.authority.issue(self.scope, ttl=timedelta(minutes=5))
-        self.manifest = ToolManifest("mail.send", ("send_message",), version="1")
         self.registry = ToolRegistry((self.manifest,))
         self.pipeline = evaluate_request(
             request_id="review-req-1",
@@ -116,6 +119,7 @@ class ReviewExecutionTests(unittest.TestCase):
             "review-grant-multi",
             ("send_message",),
             issuer="test-user",
+            allowed_effects=self.scope.allowed_effects,
         )
         authority = GrantAuthority()
         authority.issue(scope, ttl=timedelta(minutes=5), single_use=False)

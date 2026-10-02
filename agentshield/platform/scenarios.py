@@ -12,6 +12,7 @@ from typing import Any, Mapping
 from .actions import ActionDescriptor
 from .authorization import AuthorizationScope
 from .detectors import DetectionResult
+from .effects import effect_digest
 from .evaluation import ScenarioKind, ScenarioOutcome, SystemMetrics, compute_system_metrics
 from .evaluation_v2 import ConsequenceMetrics, ConsequenceOutcome, compute_consequence_metrics
 from .execution import ExecutionResult, ToolExecutor, enforce_and_execute
@@ -92,10 +93,22 @@ def run_scenario(scenario: Scenario, *, executor: ToolExecutor) -> ScenarioRun:
         source_type=scenario.source_type,
         trust_level=scenario.trust_level,
     )
+    manifest_caps = (
+        scenario.action.capabilities
+        if scenario.manifest_capabilities is None
+        else scenario.manifest_capabilities
+    )
+    manifest = ToolManifest(scenario.action.name, tuple(manifest_caps), version="1")
+    # Fixture intent is explicitly approved by the scenario author. A deployed
+    # host must approve intent independently, never just echo an agent proposal.
+    approved_effect = effect_digest(
+        action=manifest.descriptor, payload=scenario.payload, manifest=manifest,
+    )
     scope = AuthorizationScope(
         grant_id=f"scenario-grant:{scenario.scenario_id}",
         allowed_capabilities=scenario.allowed_capabilities,
         issuer="scenario-suite",
+        allowed_effects=(approved_effect,),
     )
     # The scenario harness models a trusted host issuing the capability grant.
     # This keeps synthetic ALLOW cases aligned with the production contract:
@@ -103,14 +116,7 @@ def run_scenario(scenario: Scenario, *, executor: ToolExecutor) -> ScenarioRun:
     # verifies that the grant is genuine, current and unconsumed.
     authority = GrantAuthority()
     authority.issue(scope)
-    manifest_caps = (
-        scenario.action.capabilities
-        if scenario.manifest_capabilities is None
-        else scenario.manifest_capabilities
-    )
-    registry = ToolRegistry(
-        (ToolManifest(scenario.action.name, tuple(manifest_caps), version="1"),)
-    )
+    registry = ToolRegistry((manifest,))
     pipeline = evaluate_request(
         request_id=scenario.scenario_id,
         source_type=scenario.source_type,

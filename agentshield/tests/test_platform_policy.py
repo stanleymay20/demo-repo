@@ -11,7 +11,7 @@ from agentshield.platform.policy import (
 from agentshield.platform.provenance import TrustLevel
 
 
-class PolicyV4Tests(unittest.TestCase):
+class PolicyV5Tests(unittest.TestCase):
     def scoped(self, content_risk, action_risk, trust=TrustLevel.TRUSTED):
         return PolicyInput(
             content_risk=content_risk,
@@ -20,13 +20,14 @@ class PolicyV4Tests(unittest.TestCase):
             scope_permitted=True,
             tool_verified=True,
             grant_valid=True,
+            effect_permitted=True,
         )
 
     def test_low_content_normal_action_allows_when_all_boundaries_pass(self):
         result = decide(self.scoped(ContentRisk.LOW, ActionRisk.NORMAL))
         self.assertEqual(result.decision, Decision.ALLOW)
         self.assertEqual(result.policy_version, POLICY_VERSION)
-        self.assertEqual(POLICY_VERSION, "agentshield-policy-v4")
+        self.assertEqual(POLICY_VERSION, "agentshield-policy-v5")
 
     def test_known_untrusted_low_normal_can_allow_when_explicitly_authorized(self):
         result = decide(
@@ -81,6 +82,7 @@ class PolicyV4Tests(unittest.TestCase):
                 scope_permitted=True,
                 tool_verified=False,
                 grant_valid=True,
+                effect_permitted=True,
             )
         )
         self.assertEqual(result.decision, Decision.BLOCK)
@@ -94,6 +96,7 @@ class PolicyV4Tests(unittest.TestCase):
                 scope_permitted=True,
                 tool_verified=None,
                 grant_valid=True,
+                effect_permitted=True,
             )
         )
         self.assertEqual(result.decision, Decision.REVIEW)
@@ -107,6 +110,7 @@ class PolicyV4Tests(unittest.TestCase):
                 scope_permitted=False,
                 tool_verified=True,
                 grant_valid=True,
+                effect_permitted=True,
             )
         )
         self.assertEqual(result.decision, Decision.BLOCK)
@@ -120,6 +124,7 @@ class PolicyV4Tests(unittest.TestCase):
                 scope_permitted=None,
                 tool_verified=True,
                 grant_valid=True,
+                effect_permitted=True,
             )
         )
         self.assertEqual(result.decision, Decision.REVIEW)
@@ -133,6 +138,7 @@ class PolicyV4Tests(unittest.TestCase):
                 scope_permitted=True,
                 tool_verified=True,
                 grant_valid=True,
+                effect_permitted=True,
             )
         )
         self.assertEqual(result.decision, Decision.REVIEW)

@@ -14,12 +14,13 @@ from typing import Any, Mapping, Protocol
 
 from .actions import ActionDescriptor, classify_action
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
+from .effects import check_effect_scope, effect_digest_from_payload_digest
 from .grants import GrantAuthorityProtocol, GrantStatus, grant_record_digest
 from .integrity import (
     action_digest, payload_digest, scope_digest, snapshot_payload, tool_manifest_digest,
 )
 from .pipeline import PipelineResult
-from .policy import Decision
+from .policy import Decision, POLICY_VERSION
 from .review import ReviewApproval, ReviewAuthority, ReviewStatus, review_approval_digest
 from .tools import ToolRegistry, ToolVerificationStatus, verify_action_descriptor
 
@@ -59,6 +60,14 @@ def enforce_and_execute(
     """Dispatch only when the evaluated authority still matches and remains valid."""
 
     decision = pipeline_result.policy.decision
+    if (
+        pipeline_result.policy.policy_version != POLICY_VERSION
+        or pipeline_result.audit_event.policy_version != POLICY_VERSION
+    ):
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED, decision=decision,
+            reason="policy version is stale or inconsistent; reevaluate the request",
+        )
     try:
         # A private deep snapshot closes the check/dispatch mutation window.
         # Never pass the original mapping or nested caller-owned values onward.
@@ -156,6 +165,18 @@ def enforce_and_execute(
             status=ExecutionStatus.BLOCKED,
             decision=decision,
             reason="action is no longer permitted by the authorization scope",
+        )
+
+    current_effect_digest = effect_digest_from_payload_digest(
+        action=action, submitted_payload_digest=current_payload_digest, manifest=manifest,
+    )
+    if (
+        metadata.get("effect_digest") != current_effect_digest
+        or check_effect_scope(current_effect_digest, authorization_scope) is not ScopeStatus.PERMITTED
+    ):
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED, decision=decision,
+            reason="exact effect is not permitted by the authorization scope",
         )
 
     if grant_authority is None:

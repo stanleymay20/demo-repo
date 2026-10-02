@@ -2,6 +2,7 @@
 
 from .audit import AuditEnvelope, AuditSigner, AuditVerificationStatus
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
+from .effects import effect_digest, check_effect_scope
 from .policy import ActionRisk, ContentRisk, Decision, PolicyInput, decide
 from .postgres_grants import PostgresGrantAuthority
 from .provenance import InputProvenance, TrustLevel
@@ -28,5 +29,7 @@ __all__ = [
     "ToolVerificationStatus",
     "TrustLevel",
     "check_action_scope",
+    "check_effect_scope",
+    "effect_digest",
     "decide",
 ]

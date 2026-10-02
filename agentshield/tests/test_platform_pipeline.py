@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from agentshield.platform.actions import ActionDescriptor
 from agentshield.platform.authorization import AuthorizationScope
 from agentshield.platform.detectors import DetectionResult
+from agentshield.platform.effects import effect_digest
 from agentshield.platform.grants import GrantAuthority
 from agentshield.platform.pipeline import evaluate_request
 from agentshield.platform.policy import ContentRisk, Decision
@@ -76,7 +77,9 @@ class PipelineTests(unittest.TestCase):
 
     def test_low_risk_normal_action_allows_when_grant_scope_and_tool_are_valid(self):
         action = ActionDescriptor(name="text.summarize", capabilities=("transform_text",))
-        scope = self.scope("transform_text")
+        scope = AuthorizationScope("grant-test", ("transform_text",), issuer="test-user",
+            allowed_effects=(effect_digest(action=action, payload={},
+                manifest=ToolManifest(action.name, action.capabilities)),))
         result = evaluate_request(
             request_id="r2",
             source_type="document",

@@ -9,6 +9,8 @@ A GA release must demonstrate all of the following on the exact release commit:
 - fail-closed ALLOW / REVIEW / BLOCK policy;
 - server-owned tool manifests;
 - least-privilege authorization scopes;
+- mandatory exact-effect authorization and rejection of resource/destination changes,
+  including attempts to expand an issued effect allowlist;
 - durable atomic grant verification/consumption across workers;
 - replay, expiry and revocation enforcement;
 - action, payload, scope and manifest integrity binding;

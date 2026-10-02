@@ -14,6 +14,7 @@ from .actions import ActionDescriptor, classify_action
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
 from .detectors import DetectionResult, Detector
 from .events import AuditEvent, build_audit_event
+from .effects import check_effect_scope, effect_digest_from_payload_digest
 from .grants import GrantAuthorityProtocol, GrantStatus, grant_record_digest
 from .integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
 from .policy import PolicyDecision, PolicyInput, decide
@@ -65,6 +66,12 @@ def evaluate_request(
         else None
     )
 
+    submitted_effect_digest = None
+    if tool_status is ToolVerificationStatus.VERIFIED and manifest is not None:
+        submitted_effect_digest = effect_digest_from_payload_digest(
+            action=action, submitted_payload_digest=submitted_payload_digest, manifest=manifest,
+        )
+    effect_status = check_effect_scope(submitted_effect_digest, authorization_scope)
     detection = detector.detect(content)
     action_risk = classify_action(action)
     scope_status = check_action_scope(action, authorization_scope)
@@ -93,6 +100,11 @@ def evaluate_request(
             scope_permitted=scope_permitted,
             tool_verified=tool_verified,
             grant_valid=grant_valid,
+            effect_permitted=(
+                True if effect_status is ScopeStatus.PERMITTED
+                else False if effect_status is ScopeStatus.DENIED
+                else None
+            ),
         )
     )
 
@@ -104,6 +116,8 @@ def evaluate_request(
         "scope_status": scope_status.value,
         "grant_status": grant_status.value,
         "tool_status": tool_status.value,
+        "effect_digest": submitted_effect_digest,
+        "effect_status": effect_status.value,
     }
     if authorization_scope is not None:
         metadata.update(

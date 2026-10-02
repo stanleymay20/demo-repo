@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import re
 
 from .actions import ActionDescriptor, normalize_capabilities
 
@@ -20,11 +21,12 @@ class ScopeStatus(str, Enum):
 
 @dataclass(frozen=True)
 class AuthorizationScope:
-    """Least-privilege capability grant attached to one originating task/workflow."""
+    """Host-issued capabilities and exact effects for one task/workflow."""
 
     grant_id: str
     allowed_capabilities: tuple[str, ...]
     issuer: str = "user"
+    allowed_effects: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         grant_id = self.grant_id.strip()
@@ -40,6 +42,13 @@ class AuthorizationScope:
             "allowed_capabilities",
             normalize_capabilities(self.allowed_capabilities),
         )
+        effects = tuple(self.allowed_effects)
+        if any(
+            type(value) is not str or re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in effects
+        ):
+            raise ValueError("allowed_effects must contain lowercase SHA-256 digests")
+        object.__setattr__(self, "allowed_effects", tuple(sorted(set(effects))))
 
 
 def check_action_scope(

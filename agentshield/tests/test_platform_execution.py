@@ -4,6 +4,7 @@ from datetime import timedelta
 from agentshield.platform.actions import ActionDescriptor
 from agentshield.platform.authorization import AuthorizationScope
 from agentshield.platform.detectors import DetectionResult
+from agentshield.platform.effects import effect_digest
 from agentshield.platform.execution import ExecutionStatus, enforce_and_execute
 from agentshield.platform.grants import GrantAuthority
 from agentshield.platform.pipeline import evaluate_request
@@ -44,11 +45,13 @@ class RecorderExecutor:
 
 
 class ExecutionBoundaryTests(unittest.TestCase):
-    def scope_for(self, action, *, grant_id="grant-test", extra=()):
+    def scope_for(self, action, *, payload=None, grant_id="grant-test", extra=()):
         return AuthorizationScope(
             grant_id=grant_id,
             allowed_capabilities=tuple(action.capabilities) + tuple(extra),
             issuer="test-user",
+            allowed_effects=(effect_digest(action=action, payload=payload,
+                manifest=ToolManifest(action.name, tuple(action.capabilities))),),
         )
 
     def registry_for(self, action, *, version="1", capabilities=None):
@@ -57,7 +60,7 @@ class ExecutionBoundaryTests(unittest.TestCase):
 
     def evaluate(self, *, risk, action, payload=None, scope=None, registry=None, authority=None):
         payload = {} if payload is None else payload
-        scope = self.scope_for(action) if scope is None else scope
+        scope = self.scope_for(action, payload=payload) if scope is None else scope
         registry = self.registry_for(action) if registry is None else registry
         if authority is None:
             authority = GrantAuthority()

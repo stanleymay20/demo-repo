@@ -99,6 +99,7 @@ def scope_digest(scope: AuthorizationScope) -> str:
         "grant_id": scope.grant_id,
         "issuer": scope.issuer,
         "allowed_capabilities": list(scope.allowed_capabilities),
+        "allowed_effects": list(scope.allowed_effects),
     }
     return hashlib.sha256(_canonical_json(material)).hexdigest()
 

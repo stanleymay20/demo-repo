@@ -18,7 +18,7 @@ AgentShield is a layered security boundary for AI-agent systems. Prompt-injectio
 3. **Authoritative tool registry** — server-owned `ToolManifest` defines the real capabilities of every executable tool.
 4. **Action-risk classification** — consequence class derived from the verified action descriptor.
 5. **Capability scope** — host-issued `AuthorizationScope` constrains the originating task to a least-privilege capability set.
-6. **Policy v4** — combines detector risk, provenance, tool verification, scope and action consequence into ALLOW / REVIEW / BLOCK.
+6. **Policy v5** — combines detector risk, provenance, tool verification, scope and action consequence into ALLOW / REVIEW / BLOCK.
 7. **Integrity binding** — SHA-256 binds action descriptor, payload, capability grant and tool manifest without persisting raw payload values.
 8. **Execution gate** — a still-valid ALLOW may dispatch automatically; REVIEW can dispatch only after an exact, short-lived human approval bound to a single-use grant; BLOCK never executes.
 9. **Audit evidence** — records policy version, detector identity/score, trust state, scope/tool status and integrity hashes.
@@ -33,6 +33,7 @@ Automatic execution requires all of the following:
 - provenance trust is known;
 - the action exactly matches a server-owned tool manifest;
 - the action capabilities fit inside an explicit authorization scope;
+- the exact action, complete payload and manifest match a host-approved effect in that scope;
 - the action descriptor has not changed since evaluation;
 - the payload has not changed since evaluation;
 - the authorization grant has not changed since evaluation;
@@ -40,18 +41,21 @@ Automatic execution requires all of the following:
 
 Any missing or indeterminate security state fails to REVIEW or BLOCK rather than silently becoming ALLOW.
 
-## Policy v4 summary
+## Policy v5 summary
 
 | Condition | Decision |
 |---|---|
 | tool unregistered or manifest mismatch | BLOCK |
 | action outside capability scope | BLOCK |
+| effect outside the issued effect allowlist | BLOCK |
+| effect binding missing | REVIEW; execution blocked until a bound grant is issued |
 | high content risk + sensitive action | BLOCK |
 | missing tool verification | REVIEW |
 | missing/indeterminate capability scope | REVIEW |
 | unknown provenance trust | REVIEW |
-| low content risk + normal action + verified tool + known provenance + in-scope grant | ALLOW |
-| unrecognized capability taxonomy entry | REVIEW |\n| other mixed/elevated state | REVIEW |
+| low content risk + normal action + verified tool + known provenance + live capability-and-effect grant | ALLOW |
+| unrecognized capability taxonomy entry | REVIEW |
+| other mixed/elevated state | REVIEW |
 
 ## Trust-boundary rule
 
@@ -71,9 +75,13 @@ nested levels. Tuples and custom Python subclasses are rejected rather than
 silently coerced. Integrators must convert their own data to this contract before
 evaluation. Invalid evaluation input raises ValueError before detector invocation.
 
-These hashes bind the submitted payload to dispatch; they do not establish that
-every resource named inside a payload is authorized. Host integrations must enforce
-tenant, resource, recipient, path, network destination and executor semantics.
+Policy v5 requires the exact effect digest in the issued authorization scope. It binds
+the complete payload, tool identity and manifest version, so re-evaluation cannot
+expand a grant to another recipient, tenant, resource or destination. Host approval
+must be independent of the agent proposal. Adapters must resolve and enforce actual
+resource and destination semantics (including redirects, DNS, paths and mutable
+external state); an exact payload digest alone cannot establish those semantics.
+See `EFFECT_AUTHORIZATION_V1.md` for the contract and migration requirements.
 PipelineResult, registries, authorities, review keys and executors must stay outside
 the untrusted agent's control. This library alone is not process or OS isolation.
 

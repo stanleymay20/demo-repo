@@ -74,7 +74,7 @@ def verify_action_descriptor(
         return ToolVerificationStatus.UNREGISTERED, None
 
     declared = normalize_capabilities(action.capabilities)
-    if declared != manifest.capabilities:
+    if action.name != manifest.name or declared != manifest.capabilities:
         return ToolVerificationStatus.MISMATCH, manifest
 
     return ToolVerificationStatus.VERIFIED, manifest

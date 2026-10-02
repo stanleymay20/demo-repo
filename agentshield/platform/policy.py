@@ -13,7 +13,7 @@ from enum import Enum
 
 from .provenance import TrustLevel
 
-POLICY_VERSION = "agentshield-policy-v4"
+POLICY_VERSION = "agentshield-policy-v5"
 
 
 class ContentRisk(str, Enum):
@@ -42,6 +42,7 @@ class PolicyInput:
     scope_permitted: bool | None = None
     tool_verified: bool | None = None
     grant_valid: bool | None = None
+    effect_permitted: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -52,7 +53,7 @@ class PolicyDecision:
 
 
 def decide(value: PolicyInput) -> PolicyDecision:
-    """Return the deterministic policy-v4 decision for one request."""
+    """Return the deterministic policy-v5 decision for one request."""
 
     if value.tool_verified is False:
         return PolicyDecision(
@@ -73,6 +74,13 @@ def decide(value: PolicyInput) -> PolicyDecision:
             decision=Decision.BLOCK,
             policy_version=POLICY_VERSION,
             reason="requested action capabilities exceed the authorization scope",
+        )
+
+    if value.effect_permitted is False:
+        return PolicyDecision(
+            decision=Decision.BLOCK,
+            policy_version=POLICY_VERSION,
+            reason="requested effect is outside the authorization scope",
         )
 
     if (
@@ -104,6 +112,13 @@ def decide(value: PolicyInput) -> PolicyDecision:
             decision=Decision.REVIEW,
             policy_version=POLICY_VERSION,
             reason="authorization scope is missing or indeterminate",
+        )
+
+    if value.effect_permitted is not True:
+        return PolicyDecision(
+            decision=Decision.REVIEW,
+            policy_version=POLICY_VERSION,
+            reason="exact effect authorization is missing or indeterminate; issue a bound grant",
         )
 
     if value.trust_level is TrustLevel.UNKNOWN:

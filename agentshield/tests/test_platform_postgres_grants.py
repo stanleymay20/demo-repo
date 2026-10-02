@@ -1,6 +1,7 @@
 import os
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 from agentshield.platform.authorization import AuthorizationScope
 from agentshield.platform.grants import GrantStatus
@@ -37,6 +38,7 @@ class PostgresGrantAuthorityTests(unittest.TestCase):
             "pg-grant-1",
             ("read_data",),
             issuer="integration-test",
+            allowed_effects=("a" * 64,),
         )
 
     def test_grant_persists_across_authority_instances(self):
@@ -66,6 +68,14 @@ class PostgresGrantAuthorityTests(unittest.TestCase):
         other = PostgresGrantAuthority(self.connect)
         self.assertTrue(other.revoke(self.scope.grant_id))
         self.assertIs(self.authority.verify(self.scope)[0], GrantStatus.REVOKED)
+
+    def test_effect_expansion_is_rejected_across_workers_without_consumption(self):
+        self.authority.issue(self.scope)
+        other = PostgresGrantAuthority(self.connect)
+        forged = replace(self.scope, allowed_effects=("a" * 64, "b" * 64))
+        self.assertIs(other.verify(forged)[0], GrantStatus.MISMATCH)
+        self.assertIs(other.consume(forged)[0], GrantStatus.MISMATCH)
+        self.assertIs(other.consume(self.scope)[0], GrantStatus.VALID)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,12 @@
 """Adversarial regressions for the payload authorization/dispatch boundary."""
 
 import unittest
+from dataclasses import replace
 
 from agentshield.platform.actions import ActionDescriptor
 from agentshield.platform.authorization import AuthorizationScope
 from agentshield.platform.detectors import DetectionResult
+from agentshield.platform.effects import effect_digest
 from agentshield.platform.execution import ExecutionStatus, enforce_and_execute
 from agentshield.platform.grants import GrantAuthority, GrantStatus
 from agentshield.platform.integrity import payload_digest
@@ -39,6 +41,11 @@ class PayloadBoundaryTests(unittest.TestCase):
         self.executor = Recorder()
 
     def evaluate(self, payload, *, detector=None):
+        # This fixture models explicit trusted approval of its initial request.
+        self.scope = replace(self.scope, allowed_effects=(effect_digest(
+            action=self.action, payload=payload, manifest=self.registry.resolve(self.action.name)),))
+        self.authority = GrantAuthority()
+        self.authority.issue(self.scope)
         return evaluate_request(
             request_id="payload-test", source_type="web", content="attack missed",
             action=self.action, payload=payload, detector=detector or LowDetector(),

@@ -51,6 +51,7 @@ Key controls include:
 
 - server-owned tool manifests;
 - least-privilege authorization scopes;
+- mandatory host-approved effects binding exact tool, manifest and complete payload;
 - in-memory grant authority for deterministic tests;
 - PostgreSQL-backed atomic grant authority for multi-worker deployment;
 - expiry, revocation and single-use replay resistance;
@@ -74,6 +75,11 @@ The GA workflow validates:
 - tagged-release SHA-256 manifests and build provenance.
 
 See `agentshield/GA_READINESS.md`, `SECURITY.md` and `CONTRIBUTING.md`.
+
+Runtime 0.2.0 / policy v5 requires effect-bound grants. Capability-only grants must
+be reissued by trusted infrastructure before execution. See
+`agentshield/EFFECT_AUTHORIZATION_V1.md` for the issuance example, migration and
+adapter requirements for resource and destination semantics.
 
 ## Research lineage
 

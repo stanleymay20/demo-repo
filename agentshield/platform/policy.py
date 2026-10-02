@@ -13,7 +13,7 @@ from enum import Enum
 
 from .provenance import TrustLevel
 
-POLICY_VERSION = "agentshield-policy-v5"
+POLICY_VERSION = "agentshield-policy-v6"
 
 
 class ContentRisk(str, Enum):
@@ -53,7 +53,7 @@ class PolicyDecision:
 
 
 def decide(value: PolicyInput) -> PolicyDecision:
-    """Return the deterministic policy-v5 decision for one request."""
+    """Return the deterministic policy-v6 decision for one request."""
 
     if value.tool_verified is False:
         return PolicyDecision(

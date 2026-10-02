@@ -69,6 +69,24 @@ class EffectAuthorizationTests(unittest.TestCase):
         self.assertIs(self.execute(result, self.approved).status, ExecutionStatus.EXECUTED)
         self.assertEqual(self.executor.calls, [(self.action.name, self.approved)])
 
+    def test_delegated_effect_executes_but_revoked_parent_blocks_later_dispatch(self):
+        child = replace(self.scope, grant_id="delegated-effect")
+        self.authority.delegate(self.scope, child)
+        evaluated = self.evaluate(self.approved, scope=child)
+        self.assertIs(evaluated.policy.decision, Decision.ALLOW)
+        self.authority.revoke(self.scope.grant_id)
+        self.assertIs(self.execute(evaluated, self.approved, scope=child).status, ExecutionStatus.BLOCKED)
+        self.assertEqual(self.executor.calls, [])
+        self.assertIsNone(self.authority.get(child.grant_id).consumed_at_utc)
+
+    def test_delegated_exact_effect_reaches_executor_once(self):
+        child = replace(self.scope, grant_id="delegated-effect")
+        self.authority.delegate(self.scope, child)
+        evaluated = self.evaluate(self.approved, scope=child)
+        self.assertIs(self.execute(evaluated, self.approved, scope=child).status, ExecutionStatus.EXECUTED)
+        self.assertIs(self.execute(evaluated, self.approved, scope=child).status, ExecutionStatus.BLOCKED)
+        self.assertEqual(len(self.executor.calls), 1)
+
     def test_reevaluating_changed_resources_cannot_expand_grant(self):
         for field, value in (("tenant", "team-b"), ("record", "private-key"),
                              ("destination", "external.example")):

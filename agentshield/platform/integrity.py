@@ -96,6 +96,7 @@ def action_digest(action: ActionDescriptor) -> str:
 
 def scope_digest(scope: AuthorizationScope) -> str:
     material = {
+        "scope_schema": "agentshield-scope-v2",
         "grant_id": scope.grant_id,
         "issuer": scope.issuer,
         "allowed_capabilities": list(scope.allowed_capabilities),

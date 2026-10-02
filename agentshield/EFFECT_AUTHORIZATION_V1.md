@@ -1,5 +1,8 @@
 # Exact-effect authorization — runtime 0.2.0 / policy v5
 
+This document describes the v5 effect-binding change. Runtime 0.3.0 / policy v6
+supersedes its upgrade instructions; see `DELEGATION_V1.md` before upgrading.
+
 ## Why this is required
 
 At runtime 0.1.0, a capability grant permitting `read_data` could authorize both
@@ -75,8 +78,8 @@ identity into the approved payload or enforce it atomically at the tool boundary
 If an adapter cannot establish this, hold or reject the action. Full payload approval
 is conservative: even a benign argument change requires a newly approved effect.
 
-Conserved delegation still needs a transactionally enforced parent/child authority
-and budget model; child scopes must never be self-issued by agents. Temporal
+Runtime 0.3.0 adds conserved single-use delegation (see `DELEGATION_V1.md`);
+child scopes must never be self-issued by agents. General multi-action budgets, temporal
 provenance, independent external evaluation, complete mediation, process isolation
 and deployment-level secret separation remain separate requirements. Synthetic
 tests demonstrate these contracts, not a measured 99.999% prevention probability.

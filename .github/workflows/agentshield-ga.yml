@@ -1,0 +1,149 @@
+name: AgentShield GA
+
+on:
+  push:
+    branches:
+      - main
+      - agentshield-platform-v1
+      - agentshield-ga-hardening-2026-09-29
+      - agentshield-ga-integration-2026-09-29
+    paths:
+      - 'agentshield/platform/**'
+      - 'agentshield/tests/test_platform_*.py'
+      - 'agentshield/__init__.py'
+      - 'pyproject.toml'
+      - 'SECURITY.md'
+      - 'CONTRIBUTING.md'
+      - '.github/workflows/agentshield-ga.yml'
+  pull_request:
+    paths:
+      - 'agentshield/platform/**'
+      - 'agentshield/tests/test_platform_*.py'
+      - 'agentshield/__init__.py'
+      - 'pyproject.toml'
+      - 'SECURITY.md'
+      - 'CONTRIBUTING.md'
+      - '.github/workflows/agentshield-ga.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentshield-ga-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit / Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13', '3.14']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip check
+      - name: Compile
+        run: python -m compileall -q agentshield
+      - name: Platform unit tests
+        run: python -m unittest discover -s agentshield/tests -p 'test_platform_*.py' -v
+
+  postgres:
+    name: PostgreSQL atomic-grant integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16.15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AGENTSHIELD_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Install PostgreSQL extra
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[postgres]'
+          python -m pip check
+      - name: Atomic grant tests
+        run: python -m unittest agentshield.tests.test_platform_postgres_grants -v
+
+  package:
+    name: Wheel / SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip
+          mkdir -p dist
+          python -m pip wheel . --no-deps --wheel-dir dist
+          python -m pip install --force-reinstall dist/*.whl
+          python -c "import agentshield; import agentshield.platform; print(agentshield.__version__)"
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/agentshield-sbom.spdx.json
+      - name: Upload package evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: agentshield-ga-package
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            dist/*.whl
+            dist/agentshield-sbom.spdx.json
+
+  dependency-audit:
+    name: Dependency vulnerability audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Install runtime and audit tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install setuptools==84.0.0 wheel==0.48.0
+          python -m pip install -e '.[postgres]'
+          python -m pip install pip-audit==2.10.1
+      - name: Audit installed dependency graph
+        run: python -m pip_audit

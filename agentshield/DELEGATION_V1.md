@@ -1,5 +1,8 @@
 # Conserved delegation — runtime 0.3.0 / policy v6
 
+Runtime 0.4.0 / policy v7 adds mandatory review-evidence binding; see
+`REVIEW_EVIDENCE_V1.md` for the current upgrade instructions.
+
 Delegation transfers one execution right from a single-use parent to one child.
 It does not mint an additional right. The parent becomes `DELEGATED` and cannot
 execute or delegate again. The child can execute once or transfer its right again,

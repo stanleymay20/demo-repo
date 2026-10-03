@@ -7,6 +7,7 @@ from agentshield.platform.actions import ActionDescriptor
 from agentshield.platform.authorization import AuthorizationScope
 from agentshield.platform.detectors import DetectionResult
 from agentshield.platform.effects import effect_digest
+from agentshield.platform.events import evaluation_digest
 from agentshield.platform.execution import ExecutionStatus, enforce_and_execute
 from agentshield.platform.grants import GrantAuthority, GrantStatus
 from agentshield.platform.integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
@@ -134,6 +135,7 @@ class EffectAuthorizationTests(unittest.TestCase):
             payload_digest=payload_digest(self.approved), scope_digest=scope_digest(legacy),
             tool_manifest_digest=tool_manifest_digest(self.manifest),
             policy_version=result.policy.policy_version, reviewer="human",
+            evaluation_digest=evaluation_digest(result.audit_event),
         )
         outcome = self.execute(result, self.approved, scope=legacy, approval=approval, reviewer=reviewer)
         self.assertIs(outcome.status, ExecutionStatus.BLOCKED)

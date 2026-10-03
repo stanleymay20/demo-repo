@@ -8,6 +8,7 @@ that no model output becomes authorization by accident.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import secrets
 from typing import Any, Mapping
 
 from .actions import ActionDescriptor, classify_action
@@ -47,6 +48,9 @@ def evaluate_request(
     # Bind the submitted effect before any detector/authority callback can change
     # caller-owned payload state. Invalid payloads never reach those callbacks.
     submitted_payload_digest = payload_digest(payload)
+    if type(content) is not str:
+        raise ValueError("content must be a plain string")
+    submitted_content_digest = payload_digest({"content": content})
 
     if provenance is None:
         provenance = InputProvenance(
@@ -55,6 +59,11 @@ def evaluate_request(
         )
     elif provenance.source_type != source_type:
         raise ValueError("source_type must match provenance.source_type")
+
+    submitted_provenance_digest = payload_digest({
+        "source_type": provenance.source_type, "source_id": provenance.source_id,
+        "trust_level": provenance.trust_level.value, "content_type": provenance.content_type,
+    })
 
     tool_status, manifest = verify_action_descriptor(action, tool_registry)
     tool_verified = (
@@ -109,6 +118,9 @@ def evaluate_request(
     )
 
     metadata: dict[str, Any] = {
+        "evaluation_id": secrets.token_hex(32),
+        "content_digest": submitted_content_digest,
+        "provenance_digest": submitted_provenance_digest,
         "action_name": action.name,
         "action_digest": action_digest(action),
         "payload_digest": submitted_payload_digest,

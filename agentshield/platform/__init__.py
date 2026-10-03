@@ -2,6 +2,7 @@
 
 from .audit import AuditEnvelope, AuditSigner, AuditVerificationStatus
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
+from .events import evaluation_digest
 from .effects import effect_digest, check_effect_scope
 from .policy import ActionRisk, ContentRisk, Decision, PolicyInput, decide
 from .postgres_grants import PostgresGrantAuthority
@@ -31,5 +32,6 @@ __all__ = [
     "check_action_scope",
     "check_effect_scope",
     "effect_digest",
+    "evaluation_digest",
     "decide",
 ]

@@ -67,3 +67,17 @@ def build_audit_event(
         detector_score=detector_score,
         metadata=metadata,
     )
+
+
+def evaluation_digest(event: AuditEvent) -> str:
+    """Bind review to one complete evaluation, without retaining raw source content."""
+    from .integrity import payload_digest
+
+    material = event.to_dict()
+    metadata = material.get("metadata") or {}
+    for field in ("evaluation_id", "content_digest", "provenance_digest"):
+        value = metadata.get(field)
+        if (type(value) is not str or len(value) != 64
+                or any(char not in "0123456789abcdef" for char in value)):
+            raise ValueError("evaluation lacks valid evidence bindings; reevaluate")
+    return payload_digest({"review_schema": "agentshield-review-evaluation-v1", "event": material})

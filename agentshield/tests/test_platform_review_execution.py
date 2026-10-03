@@ -1,10 +1,12 @@
 import unittest
 from datetime import timedelta
+from dataclasses import replace
 
 from agentshield.platform.actions import ActionDescriptor
 from agentshield.platform.authorization import AuthorizationScope
 from agentshield.platform.detectors import DetectionResult
 from agentshield.platform.effects import effect_digest
+from agentshield.platform.events import evaluation_digest
 from agentshield.platform.execution import ExecutionStatus, enforce_and_execute
 from agentshield.platform.grants import GrantAuthority
 from agentshield.platform.integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
@@ -77,8 +79,83 @@ class ReviewExecutionTests(unittest.TestCase):
             scope_digest=scope_digest(self.scope),
             tool_manifest_digest=tool_manifest_digest(self.manifest),
             policy_version=self.pipeline.policy.policy_version,
+            evaluation_digest=evaluation_digest(self.pipeline.audit_event),
             reviewer="human-reviewer",
         )
+
+    def execute_review(self, pipeline, approval):
+        executor = Recorder()
+        result = enforce_and_execute(
+            pipeline_result=pipeline, action=self.action, payload=self.payload,
+            executor=executor, authorization_scope=self.scope, tool_registry=self.registry,
+            grant_authority=self.authority, review_approval=approval,
+            review_authority=self.review_authority,
+        )
+        return result, executor
+
+    def test_approval_cannot_follow_reused_request_id_into_new_evidence(self):
+        approval = self.approval()
+        cases = (
+            ("changed instructions", InputProvenance("user_input", trust_level=TrustLevel.TRUSTED)),
+            ("send the approved status", InputProvenance("user_input", source_id="new-source",
+                                                        trust_level=TrustLevel.UNTRUSTED)),
+            ("send the approved status", InputProvenance("user_input", trust_level=TrustLevel.TRUSTED)),
+        )
+        for content, provenance in cases:
+            with self.subTest(content=content, provenance=provenance):
+                pipeline = evaluate_request(
+                    request_id=self.pipeline.audit_event.request_id,
+                    source_type="user_input", content=content, action=self.action,
+                    detector=FixedDetector(), payload=self.payload, provenance=provenance,
+                    authorization_scope=self.scope, tool_registry=self.registry,
+                    grant_authority=self.authority,
+                )
+                self.assertIs(pipeline.policy.decision, Decision.REVIEW)
+                result, executor = self.execute_review(pipeline, approval)
+                self.assertIs(result.status, ExecutionStatus.BLOCKED)
+                self.assertIn("mismatch", result.reason)
+                self.assertEqual(executor.calls, [])
+                self.assertEqual(self.authority.verify(self.scope)[0].value, "valid")
+        # Rejected reuse does not destroy the original reviewed execution right.
+        result, executor = self.execute_review(self.pipeline, approval)
+        self.assertIs(result.status, ExecutionStatus.EXECUTED)
+        self.assertEqual(len(executor.calls), 1)
+
+    def test_review_rejects_changed_evidence_even_with_same_evaluation_id(self):
+        approval = self.approval()
+        event = self.pipeline.audit_event
+        variants = [replace(event, detector_version="changed"),
+                    replace(event, detector_score=0.4), replace(event, reason="changed")]
+        for key in ("content_digest", "provenance_digest", "provenance_trust"):
+            metadata = dict(event.metadata)
+            metadata[key] = "f" * 64 if key.endswith("digest") else "unknown"
+            variants.append(replace(event, metadata=metadata))
+        for changed in variants:
+            with self.subTest(event=changed):
+                result, executor = self.execute_review(replace(self.pipeline, audit_event=changed), approval)
+                self.assertIs(result.status, ExecutionStatus.BLOCKED)
+                self.assertEqual(executor.calls, [])
+                self.assertEqual(self.authority.verify(self.scope)[0].value, "valid")
+
+    def test_legacy_evaluation_missing_bindings_cannot_execute_with_approval(self):
+        approval = self.approval()
+        for key in ("content_digest", "provenance_digest", "evaluation_id"):
+            metadata = dict(self.pipeline.audit_event.metadata)
+            del metadata[key]
+            pipeline = replace(self.pipeline, audit_event=replace(self.pipeline.audit_event, metadata=metadata))
+            result, executor = self.execute_review(pipeline, approval)
+            self.assertIs(result.status, ExecutionStatus.BLOCKED)
+            self.assertIn("bindings", result.reason)
+            self.assertEqual(executor.calls, [])
+        self.assertEqual(self.authority.verify(self.scope)[0].value, "valid")
+
+    def test_content_and_provenance_bindings_do_not_log_raw_content(self):
+        metadata = self.pipeline.audit_event.metadata
+        self.assertEqual(metadata["content_digest"], payload_digest({"content": "send the approved status"}))
+        self.assertEqual(metadata["provenance_digest"], payload_digest({
+            "source_type": "user_input", "source_id": None, "trust_level": "trusted", "content_type": None,
+        }))
+        self.assertNotIn("send the approved status", str(self.pipeline.audit_event.to_dict()))
 
     def test_review_is_held_without_approval(self):
         executor = Recorder()
@@ -142,6 +219,7 @@ class ReviewExecutionTests(unittest.TestCase):
             scope_digest=scope_digest(scope),
             tool_manifest_digest=tool_manifest_digest(self.manifest),
             policy_version=pipeline.policy.policy_version,
+            evaluation_digest=evaluation_digest(pipeline.audit_event),
             reviewer="human-reviewer",
         )
         executor = Recorder()

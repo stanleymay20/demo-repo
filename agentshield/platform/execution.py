@@ -14,6 +14,7 @@ from typing import Any, Mapping, Protocol
 
 from .actions import ActionDescriptor, classify_action
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
+from .events import evaluation_digest
 from .effects import check_effect_scope, effect_digest_from_payload_digest
 from .grants import GrantAuthorityProtocol, GrantStatus, grant_record_digest
 from .integrity import (
@@ -239,6 +240,13 @@ def enforce_and_execute(
                 decision=decision,
                 reason=pipeline_result.policy.reason,
             )
+        try:
+            reviewed_evaluation_digest = evaluation_digest(event)
+        except ValueError:
+            return ExecutionResult(
+                status=ExecutionStatus.BLOCKED, decision=decision,
+                reason="evaluation evidence bindings are missing or invalid; reevaluate",
+            )
         review_status = review_authority.verify(
             review_approval,
             request_id=event.request_id,
@@ -247,6 +255,7 @@ def enforce_and_execute(
             scope_digest=current_scope_digest,
             tool_manifest_digest=current_manifest_digest,
             policy_version=pipeline_result.policy.policy_version,
+            evaluation_digest=reviewed_evaluation_digest,
         )
         if review_status is not ReviewStatus.VALID:
             return ExecutionResult(

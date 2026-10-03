@@ -18,7 +18,7 @@ AgentShield is a layered security boundary for AI-agent systems. Prompt-injectio
 3. **Authoritative tool registry** — server-owned `ToolManifest` defines the real capabilities of every executable tool.
 4. **Action-risk classification** — consequence class derived from the verified action descriptor.
 5. **Capability scope** — host-issued `AuthorizationScope` constrains the originating task to a least-privilege capability set.
-6. **Policy v6** — combines detector risk, provenance, tool verification, scope and action consequence into ALLOW / REVIEW / BLOCK.
+6. **Policy v7** — combines detector risk, provenance, tool verification, scope and action consequence into ALLOW / REVIEW / BLOCK.
 7. **Integrity binding** — SHA-256 binds action descriptor, payload, capability grant and tool manifest without persisting raw payload values.
 8. **Execution gate** — a still-valid ALLOW may dispatch automatically; REVIEW can dispatch only after an exact, short-lived human approval bound to a single-use grant; BLOCK never executes.
 9. **Audit evidence** — records policy version, detector identity/score, trust state, scope/tool status and integrity hashes.
@@ -41,7 +41,7 @@ Automatic execution requires all of the following:
 
 Any missing or indeterminate security state fails to REVIEW or BLOCK rather than silently becoming ALLOW.
 
-## Policy v6 summary
+## Policy v7 summary
 
 | Condition | Decision |
 |---|---|
@@ -75,7 +75,7 @@ nested levels. Tuples and custom Python subclasses are rejected rather than
 silently coerced. Integrators must convert their own data to this contract before
 evaluation. Invalid evaluation input raises ValueError before detector invocation.
 
-Policy v6 requires the exact effect digest in the issued authorization scope. It binds
+Policy v7 requires the exact effect digest in the issued authorization scope. It binds
 the complete payload, tool identity and manifest version, so re-evaluation cannot
 expand a grant to another recipient, tenant, resource or destination. Host approval
 must be independent of the agent proposal. Adapters must resolve and enforce actual
@@ -100,3 +100,7 @@ The production runtime is consolidated through the GA integration path onto `mai
 Delegation transfers one single-use execution right to one attenuated child, with
 ancestor validity checked at consumption. See `DELEGATION_V1.md` for transaction
 semantics, migration and boundaries.
+
+Human approvals bind the complete evaluated audit record, including content and
+provenance digests and a unique evaluation ID. Re-evaluation requires new approval.
+See `REVIEW_EVIDENCE_V1.md` for the contract and upgrade requirements.

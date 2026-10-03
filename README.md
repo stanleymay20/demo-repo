@@ -76,12 +76,13 @@ The GA workflow validates:
 
 See `agentshield/GA_READINESS.md`, `SECURITY.md` and `CONTRIBUTING.md`.
 
-Runtime 0.3.0 / policy v6 requires effect-bound grants and enforces bounded,
+Runtime 0.4.0 / policy v7 requires effect-bound grants and enforces bounded,
 single-use delegation. Capability-only grants must
 be reissued by trusted infrastructure before execution. See
 `agentshield/EFFECT_AUTHORIZATION_V1.md` for the issuance example, migration and
 adapter requirements for resource and destination semantics. See
-`agentshield/DELEGATION_V1.md` for delegation and the required coordinated upgrade.
+`agentshield/DELEGATION_V1.md` for delegation. Review approvals now bind the complete
+evaluation; see `agentshield/REVIEW_EVIDENCE_V1.md` for the required upgrade.
 
 ## Research lineage
 

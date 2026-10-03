@@ -17,7 +17,8 @@ class ReviewAuthorityTests(unittest.TestCase):
             payload_digest="b" * 64,
             scope_digest="c" * 64,
             tool_manifest_digest="d" * 64,
-            policy_version="agentshield-policy-v4",
+            policy_version="agentshield-policy-v7",
+            evaluation_digest="e" * 64,
         )
 
     def test_valid_approval_verifies(self):
@@ -43,6 +44,27 @@ class ReviewAuthorityTests(unittest.TestCase):
             self.authority.verify(approval, **changed),
             ReviewStatus.MISMATCH,
         )
+
+    def test_evaluation_binding_is_signed_and_compared(self):
+        approval = self.authority.issue(**self.kwargs, reviewer="human@example")
+        self.assertIs(self.authority.verify(replace(approval, evaluation_digest="f" * 64),
+                                           **self.kwargs), ReviewStatus.INVALID_SIGNATURE)
+        changed = dict(self.kwargs, evaluation_digest="f" * 64)
+        self.assertIs(self.authority.verify(approval, **changed), ReviewStatus.MISMATCH)
+
+    def test_missing_or_invalid_evaluation_digest_cannot_be_issued(self):
+        for value in ("", "short", "z" * 64, None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.authority.issue(**dict(self.kwargs, evaluation_digest=value), reviewer="human")
+        legacy = dict(self.kwargs)
+        del legacy["evaluation_digest"]
+        with self.assertRaises(TypeError):
+            self.authority.issue(**legacy, reviewer="human")
+
+    def test_future_approval_is_not_yet_valid(self):
+        now = datetime.now(timezone.utc)
+        approval = self.authority.issue(**self.kwargs, reviewer="human", now=now + timedelta(minutes=1))
+        self.assertIs(self.authority.verify(approval, **self.kwargs, now=now), ReviewStatus.NOT_YET_VALID)
 
     def test_expired_approval_fails_closed(self):
         issued = datetime.now(timezone.utc) - timedelta(minutes=10)

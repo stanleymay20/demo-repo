@@ -1,8 +1,13 @@
-"""Tamper-evident audit envelopes for AgentShield.
+"""Tamper-evident audit envelopes and chained trails for AgentShield.
 
 Raw untrusted content is intentionally outside this format. The signer authenticates a
-canonical event hash and optionally chains each envelope to the previous envelope.
-Persistence can be supplied by the host (database, append-only object store, SIEM, etc.).
+canonical event hash and chains each envelope to the previous envelope. ``AuditTrail``
+serializes appends and can synchronously hand every sealed event to a host persistence
+sink (database, append-only object store, SIEM, transparency service, etc.).
+
+HMAC chaining detects modification/reordering. Production deployments should persist and
+periodically anchor the latest envelope hash outside the runtime writer's control to make
+tail truncation detectable across process loss or compromise.
 """
 
 from __future__ import annotations
@@ -12,7 +17,8 @@ from enum import Enum
 import hashlib
 import hmac
 import json
-from typing import Any, Mapping
+from threading import RLock
+from typing import Any, Callable, Mapping
 
 
 AUDIT_ENVELOPE_SCHEMA_VERSION = "agentshield-audit-envelope-v1"
@@ -169,3 +175,51 @@ class AuditSigner:
         if not hmac.compare_digest(expected_signature, envelope.signature):
             return AuditVerificationStatus.INVALID_SIGNATURE
         return AuditVerificationStatus.VALID
+
+
+AuditSink = Callable[[AuditEnvelope, Any], None]
+
+
+class AuditTrail:
+    """Concurrency-safe append-only envelope chain with optional synchronous persistence.
+
+    The trail keeps a local copy for verification/testing and invokes ``sink`` before the
+    append is acknowledged to the caller. A production sink should durably persist both
+    envelope and event and separately anchor the head hash on an operational cadence.
+    """
+
+    def __init__(self, signer: AuditSigner, *, sink: AuditSink | None = None) -> None:
+        self._signer = signer
+        self._sink = sink
+        self._events: list[Any] = []
+        self._envelopes: list[AuditEnvelope] = []
+        self._lock = RLock()
+
+    def append(self, event: Any) -> AuditEnvelope:
+        with self._lock:
+            previous = self._envelopes[-1] if self._envelopes else None
+            envelope = self._signer.seal(
+                event,
+                sequence=len(self._envelopes),
+                previous=previous,
+            )
+            if self._sink is not None:
+                self._sink(envelope, event)
+            self._events.append(event)
+            self._envelopes.append(envelope)
+            return envelope
+
+    @property
+    def head(self) -> AuditEnvelope | None:
+        with self._lock:
+            return self._envelopes[-1] if self._envelopes else None
+
+    @property
+    def envelopes(self) -> tuple[AuditEnvelope, ...]:
+        with self._lock:
+            return tuple(self._envelopes)
+
+    @property
+    def events(self) -> tuple[Any, ...]:
+        with self._lock:
+            return tuple(self._events)

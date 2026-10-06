@@ -7,7 +7,7 @@ dispatch. Single-use grants are consumed before the side effect.
 
 In-process evaluations carry a process-local integrity seal. Detached evaluations must
 carry a valid Ed25519 signature from a configured evaluation service; unsigned detached
-ALLOW/REVIEW results fail closed.
+ALLOW/REVIEW results fail closed. Human review is verified with public keys only.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from .integrity import (
 )
 from .pipeline import PipelineResult, verify_in_process_evaluation
 from .policy import Decision, POLICY_VERSION
-from .review import ReviewApproval, ReviewAuthority, ReviewStatus, review_approval_digest
+from .review import ReviewApproval, ReviewVerifier, ReviewStatus, review_approval_digest
 from .signing import EvaluationSignature, EvaluationSignatureStatus, EvaluationVerifier
 from .tools import ToolRegistry, ToolVerificationStatus, verify_action_descriptor
 
@@ -61,7 +61,7 @@ def enforce_and_execute(
     tool_registry: ToolRegistry | None = None,
     grant_authority: GrantAuthorityProtocol | None = None,
     review_approval: ReviewApproval | None = None,
-    review_authority: ReviewAuthority | None = None,
+    review_verifier: ReviewVerifier | None = None,
     evaluation_signature: EvaluationSignature | None = None,
     evaluation_verifier: EvaluationVerifier | None = None,
 ) -> ExecutionResult:
@@ -275,7 +275,7 @@ def enforce_and_execute(
                 decision=decision,
                 reason="human-review execution requires a single-use grant",
             )
-        if review_approval is None or review_authority is None:
+        if review_approval is None or review_verifier is None:
             return ExecutionResult(
                 status=ExecutionStatus.HELD_FOR_REVIEW,
                 decision=decision,
@@ -288,7 +288,7 @@ def enforce_and_execute(
                 status=ExecutionStatus.BLOCKED, decision=decision,
                 reason="evaluation evidence bindings are missing or invalid; reevaluate",
             )
-        review_status = review_authority.verify(
+        review_status = review_verifier.verify(
             review_approval,
             request_id=event.request_id,
             action_digest=current_action_digest,

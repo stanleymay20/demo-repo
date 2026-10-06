@@ -13,8 +13,8 @@ dependencies = []
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]==3.3.6"]
-signing = ["cryptography>=46.0.0,<48.0.0"]
-full = ["psycopg[binary]==3.3.6", "cryptography>=46.0.0,<48.0.0"]
+signing = ["cryptography>=50.0.0,<51.0.0"]
+full = ["psycopg[binary]==3.3.6", "cryptography>=50.0.0,<51.0.0"]
 
 [tool.setuptools.packages.find]
 include = ["agentshield*"]

@@ -14,7 +14,7 @@ from agentshield.platform.integrity import action_digest, payload_digest, scope_
 from agentshield.platform.pipeline import evaluate_request
 from agentshield.platform.policy import ContentRisk, Decision
 from agentshield.platform.provenance import InputProvenance, TrustLevel
-from agentshield.platform.review import ReviewAuthority
+from agentshield.platform.review import ReviewSigner, ReviewVerifier
 from agentshield.platform.tools import ToolManifest, ToolRegistry
 
 
@@ -57,11 +57,11 @@ class EffectAuthorizationTests(unittest.TestCase):
             tool_registry=ToolRegistry((manifest,)),
         )
 
-    def execute(self, result, payload, *, scope=None, approval=None, reviewer=None):
+    def execute(self, result, payload, *, scope=None, approval=None, verifier=None):
         return enforce_and_execute(
             pipeline_result=result, action=self.action, payload=payload, executor=self.executor,
             authorization_scope=scope or self.scope, grant_authority=self.authority,
-            tool_registry=self.registry, review_approval=approval, review_authority=reviewer,
+            tool_registry=self.registry, review_approval=approval, review_verifier=verifier,
         )
 
     def test_exact_approved_effect_executes(self):
@@ -129,15 +129,16 @@ class EffectAuthorizationTests(unittest.TestCase):
         self.authority.issue(legacy)
         result = self.evaluate(self.approved, scope=legacy)
         self.assertIs(result.policy.decision, Decision.REVIEW)
-        reviewer = ReviewAuthority({"key": b"r" * 32}, active_key_id="key")
-        approval = reviewer.issue(
+        signer = ReviewSigner({"key": b"r" * 32}, active_key_id="key")
+        verifier = ReviewVerifier(signer.public_keys())
+        approval = signer.issue(
             request_id=result.audit_event.request_id, action_digest=action_digest(self.action),
             payload_digest=payload_digest(self.approved), scope_digest=scope_digest(legacy),
             tool_manifest_digest=tool_manifest_digest(self.manifest),
             policy_version=result.policy.policy_version, reviewer="human",
             evaluation_digest=evaluation_digest(result.audit_event),
         )
-        outcome = self.execute(result, self.approved, scope=legacy, approval=approval, reviewer=reviewer)
+        outcome = self.execute(result, self.approved, scope=legacy, approval=approval, verifier=verifier)
         self.assertIs(outcome.status, ExecutionStatus.BLOCKED)
         self.assertEqual(self.executor.calls, [])
         self.assertIs(self.authority.verify(legacy)[0], GrantStatus.VALID)

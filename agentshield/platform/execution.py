@@ -4,6 +4,10 @@ The policy decision is not advisory: side effects are dispatched only after an A
 decision, or after an exact REVIEW decision receives a valid cryptographically-bound
 human approval. Action, payload, grant and tool state are re-verified immediately before
 dispatch. Single-use grants are consumed before the side effect.
+
+In-process evaluations carry a process-local integrity seal. Detached evaluations must
+carry a valid Ed25519 signature from a configured evaluation service; unsigned detached
+ALLOW/REVIEW results fail closed.
 """
 
 from __future__ import annotations
@@ -20,9 +24,10 @@ from .grants import GrantAuthorityProtocol, GrantStatus, grant_record_digest
 from .integrity import (
     action_digest, payload_digest, scope_digest, snapshot_payload, tool_manifest_digest,
 )
-from .pipeline import PipelineResult
+from .pipeline import PipelineResult, verify_in_process_evaluation
 from .policy import Decision, POLICY_VERSION
 from .review import ReviewApproval, ReviewAuthority, ReviewStatus, review_approval_digest
+from .signing import EvaluationSignature, EvaluationSignatureStatus, EvaluationVerifier
 from .tools import ToolRegistry, ToolVerificationStatus, verify_action_descriptor
 
 
@@ -57,6 +62,8 @@ def enforce_and_execute(
     grant_authority: GrantAuthorityProtocol | None = None,
     review_approval: ReviewApproval | None = None,
     review_authority: ReviewAuthority | None = None,
+    evaluation_signature: EvaluationSignature | None = None,
+    evaluation_verifier: EvaluationVerifier | None = None,
 ) -> ExecutionResult:
     """Dispatch only when the evaluated authority still matches and remains valid."""
 
@@ -218,6 +225,40 @@ def enforce_and_execute(
             decision=decision,
             reason="audit decision does not match pipeline decision",
         )
+    if event.reason != pipeline_result.policy.reason:
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="audit reason does not match pipeline policy",
+        )
+    if (
+        event.content_risk != pipeline_result.detection.content_risk.value
+        or event.detector_name != pipeline_result.detection.detector_name
+        or event.detector_version != pipeline_result.detection.detector_version
+        or event.detector_score != pipeline_result.detection.score
+    ):
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=decision,
+            reason="audit detector evidence does not match pipeline detection",
+        )
+
+    # BLOCK cannot create a side effect, so it is safe to honor even when it arrived
+    # detached. Any decision that could progress toward execution must be authenticated.
+    if decision is not Decision.BLOCK and not verify_in_process_evaluation(pipeline_result):
+        if evaluation_signature is None or evaluation_verifier is None:
+            return ExecutionResult(
+                status=ExecutionStatus.BLOCKED,
+                decision=decision,
+                reason="detached evaluation is unsigned or has no trusted verifier",
+            )
+        signature_status = evaluation_verifier.verify(pipeline_result, evaluation_signature)
+        if signature_status is not EvaluationSignatureStatus.VALID:
+            return ExecutionResult(
+                status=ExecutionStatus.BLOCKED,
+                decision=decision,
+                reason=f"detached evaluation authentication failed: {signature_status.value}",
+            )
 
     if decision is Decision.BLOCK:
         return ExecutionResult(

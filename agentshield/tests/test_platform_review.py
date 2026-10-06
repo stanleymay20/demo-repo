@@ -2,15 +2,26 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
-from agentshield.platform.review import ReviewAuthority, ReviewStatus
+from agentshield.platform.review import ReviewSigner, ReviewVerifier, ReviewStatus
+
+
+class MutableClock:
+    def __init__(self, current):
+        self.current = current
+
+    def __call__(self):
+        return self.current
 
 
 class ReviewAuthorityTests(unittest.TestCase):
     def setUp(self):
-        self.authority = ReviewAuthority(
+        self.clock = MutableClock(datetime.now(timezone.utc))
+        self.signer = ReviewSigner(
             {"k1": b"a" * 32, "old": b"b" * 32},
             active_key_id="k1",
+            clock=self.clock,
         )
+        self.verifier = ReviewVerifier(self.signer.public_keys(), clock=self.clock)
         self.kwargs = dict(
             request_id="req-1",
             action_digest="a" * 64,
@@ -22,60 +33,67 @@ class ReviewAuthorityTests(unittest.TestCase):
         )
 
     def test_valid_approval_verifies(self):
-        approval = self.authority.issue(**self.kwargs, reviewer="human@example")
+        approval = self.signer.issue(**self.kwargs, reviewer="human@example")
         self.assertIs(
-            self.authority.verify(approval, **self.kwargs),
+            self.verifier.verify(approval, **self.kwargs),
             ReviewStatus.VALID,
         )
 
+    def test_verifier_contains_no_private_signing_api(self):
+        self.assertFalse(hasattr(self.verifier, "issue"))
+        self.assertFalse(hasattr(self.verifier, "_private_keys"))
+
     def test_tampered_approval_fails_signature(self):
-        approval = self.authority.issue(**self.kwargs, reviewer="human@example")
+        approval = self.signer.issue(**self.kwargs, reviewer="human@example")
         tampered = replace(approval, reviewer="attacker")
         self.assertIs(
-            self.authority.verify(tampered, **self.kwargs),
+            self.verifier.verify(tampered, **self.kwargs),
             ReviewStatus.INVALID_SIGNATURE,
         )
 
     def test_approval_is_bound_to_exact_payload(self):
-        approval = self.authority.issue(**self.kwargs, reviewer="human@example")
+        approval = self.signer.issue(**self.kwargs, reviewer="human@example")
         changed = dict(self.kwargs)
-        changed["payload_digest"] = "e" * 64
+        changed["payload_digest"] = "f" * 64
         self.assertIs(
-            self.authority.verify(approval, **changed),
+            self.verifier.verify(approval, **changed),
             ReviewStatus.MISMATCH,
         )
 
     def test_evaluation_binding_is_signed_and_compared(self):
-        approval = self.authority.issue(**self.kwargs, reviewer="human@example")
-        self.assertIs(self.authority.verify(replace(approval, evaluation_digest="f" * 64),
+        approval = self.signer.issue(**self.kwargs, reviewer="human@example")
+        self.assertIs(self.verifier.verify(replace(approval, evaluation_digest="f" * 64),
                                            **self.kwargs), ReviewStatus.INVALID_SIGNATURE)
         changed = dict(self.kwargs, evaluation_digest="f" * 64)
-        self.assertIs(self.authority.verify(approval, **changed), ReviewStatus.MISMATCH)
+        self.assertIs(self.verifier.verify(approval, **changed), ReviewStatus.MISMATCH)
 
     def test_missing_or_invalid_evaluation_digest_cannot_be_issued(self):
         for value in ("", "short", "z" * 64, None):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                self.authority.issue(**dict(self.kwargs, evaluation_digest=value), reviewer="human")
+                self.signer.issue(**dict(self.kwargs, evaluation_digest=value), reviewer="human")
         legacy = dict(self.kwargs)
         del legacy["evaluation_digest"]
         with self.assertRaises(TypeError):
-            self.authority.issue(**legacy, reviewer="human")
+            self.signer.issue(**legacy, reviewer="human")
 
     def test_future_approval_is_not_yet_valid(self):
-        now = datetime.now(timezone.utc)
-        approval = self.authority.issue(**self.kwargs, reviewer="human", now=now + timedelta(minutes=1))
-        self.assertIs(self.authority.verify(approval, **self.kwargs, now=now), ReviewStatus.NOT_YET_VALID)
+        now = self.clock.current
+        self.clock.current = now + timedelta(minutes=1)
+        approval = self.signer.issue(**self.kwargs, reviewer="human")
+        self.clock.current = now
+        self.assertIs(self.verifier.verify(approval, **self.kwargs), ReviewStatus.NOT_YET_VALID)
 
     def test_expired_approval_fails_closed(self):
-        issued = datetime.now(timezone.utc) - timedelta(minutes=10)
-        approval = self.authority.issue(
+        now = self.clock.current
+        self.clock.current = now - timedelta(minutes=10)
+        approval = self.signer.issue(
             **self.kwargs,
             reviewer="human@example",
             ttl=timedelta(minutes=1),
-            now=issued,
         )
+        self.clock.current = now
         self.assertIs(
-            self.authority.verify(approval, **self.kwargs),
+            self.verifier.verify(approval, **self.kwargs),
             ReviewStatus.EXPIRED,
         )
 

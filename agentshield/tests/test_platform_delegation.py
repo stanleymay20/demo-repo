@@ -10,6 +10,14 @@ from agentshield.platform.authorization import AuthorizationScope
 from agentshield.platform.grants import GrantAuthority, GrantStatus, MAX_DELEGATION_DEPTH
 
 
+class MutableClock:
+    def __init__(self, current):
+        self.current = current
+
+    def __call__(self):
+        return self.current
+
+
 class DelegationContract:
     def child_scope(self, grant_id="child"):
         return replace(self.scope, grant_id=grant_id, allowed_capabilities=("read_data",),
@@ -48,15 +56,11 @@ class DelegationContract:
             self.authority.delegate(forged, self.child_scope())
         self.assertIs(self.authority.verify(self.scope)[0], GrantStatus.VALID)
 
-    def test_child_expiry_is_clamped_and_future_grants_cannot_execute(self):
-        now = datetime.now(timezone.utc)
-        root = self.authority.issue(self.scope, ttl=timedelta(seconds=10), now=now)
+    def test_child_expiry_is_clamped_to_parent(self):
+        root = self.authority.issue(self.scope, ttl=timedelta(minutes=5))
         child = self.child_scope()
-        record = self.authority.delegate(self.scope, child, ttl=timedelta(hours=1), now=now)
+        record = self.authority.delegate(self.scope, child, ttl=timedelta(hours=1))
         self.assertEqual(record.expires_at_utc, root.expires_at_utc)
-        self.assertIs(self.authority.consume(child, now=now - timedelta(seconds=1))[0], GrantStatus.NOT_YET_VALID)
-        self.assertIs(self.authority.consume(child, now=root.expires_at_utc)[0], GrantStatus.EXPIRED)
-        self.assertIsNone(self.authority.get(child.grant_id).consumed_at_utc)
 
     def test_revocation_of_any_ancestor_invalidates_descendant(self):
         self.authority.issue(self.scope)
@@ -69,20 +73,16 @@ class DelegationContract:
         self.assertIs(self.authority.consume(leaf)[0], GrantStatus.ANCESTOR_INVALID)
         self.assertIsNone(self.authority.get(leaf.grant_id).consumed_at_utc)
 
-    def test_child_revocation_and_invalid_parent_states_cannot_mint_grants(self):
-        now = datetime.now(timezone.utc)
-        for state in ("revoked", "consumed", "expired", "future"):
+    def test_revoked_or_consumed_parent_cannot_mint_grants(self):
+        for state in ("revoked", "consumed"):
             parent = replace(self.scope, grant_id="parent-" + state)
-            issued = now - timedelta(minutes=10) if state == "expired" else now
-            if state == "future":
-                issued = now + timedelta(minutes=10)
-            self.authority.issue(parent, now=issued)
+            self.authority.issue(parent)
             if state == "revoked":
                 self.authority.revoke(parent.grant_id)
-            if state == "consumed":
-                self.authority.consume(parent, now=now)
+            else:
+                self.authority.consume(parent)
             with self.subTest(state=state), self.assertRaises(ValueError):
-                self.authority.delegate(parent, self.child_scope("invalid-" + state), now=now)
+                self.authority.delegate(parent, self.child_scope("invalid-" + state))
             self.assertIsNone(self.authority.get("invalid-" + state))
 
     def test_duplicate_child_failure_rolls_back_parent_transfer(self):
@@ -95,16 +95,12 @@ class DelegationContract:
         self.assertIsNone(self.authority.get(self.scope.grant_id).delegated_to)
         self.assertIsNone(self.authority.get(child.grant_id).parent_grant_id)
 
-    def test_reusable_parent_self_delegation_and_nonpositive_ttl_rejected(self):
+    def test_self_delegation_and_nonpositive_ttl_rejected(self):
         self.authority.issue(self.scope)
         with self.assertRaises(ValueError):
             self.authority.delegate(self.scope, self.scope)
         with self.assertRaises(ValueError):
             self.authority.delegate(self.scope, self.child_scope(), ttl=timedelta(0))
-        reusable = replace(self.scope, grant_id="reusable")
-        self.authority.issue(reusable, single_use=False)
-        with self.assertRaises(ValueError):
-            self.authority.delegate(reusable, self.child_scope())
         self.assertIs(self.authority.verify(self.scope)[0], GrantStatus.VALID)
 
     def test_bounded_chain_cannot_expand_depth_and_middle_revocation_propagates(self):
@@ -161,7 +157,8 @@ class DelegationContract:
 
 class InMemoryDelegationTests(DelegationContract, unittest.TestCase):
     def setUp(self):
-        self.authority = GrantAuthority()
+        self.clock = MutableClock(datetime.now(timezone.utc))
+        self.authority = GrantAuthority(clock=self.clock)
         self.scope = AuthorizationScope("root", ("read_data", "transform_text"),
             allowed_effects=("a" * 64, "b" * 64))
 
@@ -173,6 +170,30 @@ class InMemoryDelegationTests(DelegationContract, unittest.TestCase):
         for parent_id in ("missing", child.grant_id):
             self.authority._records[child.grant_id] = replace(original, parent_grant_id=parent_id)
             self.assertIs(self.authority.consume(child)[0], GrantStatus.ANCESTOR_INVALID)
+
+    def test_expired_or_future_parent_cannot_delegate(self):
+        start = self.clock.current
+
+        expired = replace(self.scope, grant_id="parent-expired")
+        self.authority.issue(expired, ttl=timedelta(seconds=1))
+        self.clock.current = start + timedelta(seconds=2)
+        with self.assertRaises(ValueError):
+            self.authority.delegate(expired, self.child_scope("invalid-expired"))
+
+        self.clock.current = start + timedelta(minutes=10)
+        future = replace(self.scope, grant_id="parent-future")
+        self.authority.issue(future)
+        self.clock.current = start
+        with self.assertRaises(ValueError):
+            self.authority.delegate(future, self.child_scope("invalid-future"))
+
+    def test_legacy_reusable_parent_cannot_delegate(self):
+        self.authority.issue(self.scope)
+        original = self.authority.get(self.scope.grant_id)
+        self.authority._records[self.scope.grant_id] = replace(original, single_use=False)
+        with self.assertRaises(ValueError):
+            self.authority.delegate(self.scope, self.child_scope())
+        self.assertIs(self.authority.verify(self.scope)[0], GrantStatus.REUSABLE_UNSUPPORTED)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 """Durable grants and conserved delegation, serialized by root-to-leaf row locks.
 
-Factories must return non-autocommit psycopg connections. Validity is checked with
-PostgreSQL's clock after acquiring locks, including all delegation ancestors.
+Factories must return non-autocommit psycopg connections. All grant lifecycle timestamps
+and validity decisions use PostgreSQL ``clock_timestamp()`` after acquiring the relevant
+locks. Callers cannot override the security clock. Every newly issued executable grant is
+single-use; legacy reusable records fail closed during verification.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ _TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class PostgresGrantAuthority:
-    """Atomic grant lifecycle and single-credit delegation across workers."""
+    """Atomic single-use grant lifecycle and single-credit delegation across workers."""
 
     def __init__(self, connection_factory: Callable[[], Any], *, table_name: str = "agentshield_grants"):
         if not _TABLE_RE.fullmatch(table_name):
@@ -31,9 +33,9 @@ class PostgresGrantAuthority:
         self._table = table_name
 
     @staticmethod
-    def _now(value: datetime) -> datetime:
+    def _normalize_time(value: datetime) -> datetime:
         if value.tzinfo is None:
-            raise ValueError("now must be timezone-aware")
+            raise ValueError("database clock returned a timezone-naive datetime")
         return value.astimezone(timezone.utc)
 
     @contextmanager
@@ -51,11 +53,9 @@ class PostgresGrantAuthority:
         finally:
             conn.close()
 
-    def _clock(self, cur, now: datetime | None) -> datetime:
-        if now is None:
-            cur.execute("SELECT clock_timestamp()")
-            now = cur.fetchone()[0]
-        return self._now(now)
+    def _clock(self, cur) -> datetime:
+        cur.execute("SELECT clock_timestamp()")
+        return self._normalize_time(cur.fetchone()[0])
 
     @property
     def _columns(self) -> str:
@@ -121,26 +121,25 @@ class PostgresGrantAuthority:
 
     def issue(
         self, scope: AuthorizationScope, *, ttl: timedelta = timedelta(minutes=5),
-        single_use: bool = True, now: datetime | None = None,
     ) -> GrantRecord:
         if ttl <= timedelta(0):
             raise ValueError("grant ttl must be positive")
         with self._transaction() as cur:
-            current = self._clock(cur, now)
+            current = self._clock(cur)
             return self._insert(cur, GrantRecord(
                 grant_id=scope.grant_id, scope_digest=scope_digest(scope), issuer=scope.issuer,
                 nonce=secrets.token_urlsafe(24), issued_at_utc=current,
-                expires_at_utc=current + ttl, single_use=single_use,
+                expires_at_utc=current + ttl, single_use=True,
             ))
 
     def get(self, grant_id: str) -> GrantRecord | None:
         with self._transaction() as cur:
             return self._read(cur, grant_id)
 
-    def verify(self, scope: AuthorizationScope, *, now: datetime | None = None):
+    def verify(self, scope: AuthorizationScope):
         with self._transaction() as cur:
             chain = self._locked_chain(cur, scope.grant_id)
-            status = verify_grant_chain(scope, chain, self._clock(cur, now))
+            status = verify_grant_chain(scope, chain, self._clock(cur))
             return status, chain[0] if chain else None
 
     def revoke(self, grant_id: str) -> bool:
@@ -151,13 +150,14 @@ class PostgresGrantAuthority:
             )
             return cur.fetchone() is not None
 
-    def consume(self, scope: AuthorizationScope, *, now: datetime | None = None):
+    def consume(self, scope: AuthorizationScope):
         with self._transaction() as cur:
             chain = self._locked_chain(cur, scope.grant_id)
-            current = self._clock(cur, now)
+            # Security time is sampled only after the full lineage is locked.
+            current = self._clock(cur)
             status = verify_grant_chain(scope, chain, current)
             record = chain[0] if chain else None
-            if status is not GrantStatus.VALID or record is None or not record.single_use:
+            if status is not GrantStatus.VALID or record is None:
                 return status, record
             cur.execute(
                 f"UPDATE {self._table} SET consumed_at_utc = %s WHERE grant_id = %s "
@@ -170,11 +170,13 @@ class PostgresGrantAuthority:
 
     def delegate(
         self, parent_scope: AuthorizationScope, child_scope: AuthorizationScope, *,
-        ttl: timedelta = timedelta(minutes=5), now: datetime | None = None,
+        ttl: timedelta = timedelta(minutes=5),
     ) -> GrantRecord:
         with self._transaction() as cur:
             chain = self._locked_chain(cur, parent_scope.grant_id)
-            child = delegated_record(parent_scope, child_scope, chain, now=self._clock(cur, now), ttl=ttl)
+            # Delegation validity and child issuance use the same database-owned clock.
+            current = self._clock(cur)
+            child = delegated_record(parent_scope, child_scope, chain, now=current, ttl=ttl)
             created = self._insert(cur, child)
             cur.execute(
                 f"UPDATE {self._table} SET delegated_to = %s WHERE grant_id = %s RETURNING grant_id",

@@ -1,8 +1,8 @@
 """AgentShield layered agent-security platform primitives."""
 
-from .audit import AuditEnvelope, AuditSigner, AuditVerificationStatus
+from .audit import AuditEnvelope, AuditSigner, AuditTrail, AuditVerificationStatus
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
-from .events import evaluation_digest
+from .events import ExecutionAuditEvent, evaluation_digest
 from .effects import effect_digest, check_effect_scope
 from .pipeline import pipeline_result_digest, verify_in_process_evaluation
 from .policy import ActionRisk, ContentRisk, Decision, PolicyInput, decide
@@ -21,6 +21,7 @@ __all__ = [
     "ActionRisk",
     "AuditEnvelope",
     "AuditSigner",
+    "AuditTrail",
     "AuditVerificationStatus",
     "AuthorizationScope",
     "ContentRisk",
@@ -29,6 +30,7 @@ __all__ = [
     "EvaluationSignatureStatus",
     "EvaluationSigner",
     "EvaluationVerifier",
+    "ExecutionAuditEvent",
     "InputProvenance",
     "PolicyInput",
     "PostgresGrantAuthority",

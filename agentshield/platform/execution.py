@@ -25,14 +25,17 @@ from typing import Any, Mapping, Protocol
 from .actions import ActionDescriptor, classify_action
 from .audit import AuditEnvelope, AuditSigner, AuditTrail
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
-from .events import ExecutionAuditEvent, build_execution_audit_event, evaluation_digest
+from .detectors import DetectionResult
+from .events import (
+    AuditEvent, ExecutionAuditEvent, build_execution_audit_event, evaluation_digest,
+)
 from .effects import check_effect_scope, effect_digest_from_payload_digest
 from .grants import GrantAuthorityProtocol, GrantStatus, grant_record_digest
 from .integrity import (
     action_digest, payload_digest, scope_digest, snapshot_payload, tool_manifest_digest,
 )
 from .pipeline import PipelineResult, verify_in_process_evaluation
-from .policy import Decision, POLICY_VERSION
+from .policy import Decision, POLICY_VERSION, PolicyDecision
 from .review import ReviewApproval, ReviewVerifier, ReviewStatus, review_approval_digest
 from .signing import EvaluationSignature, EvaluationSignatureStatus, EvaluationVerifier
 from .tools import ToolRegistry, ToolVerificationStatus, verify_action_descriptor
@@ -83,6 +86,22 @@ def enforce_and_execute(
     audit_trail: AuditTrail | None = None,
 ) -> ExecutionResult:
     """Dispatch only when evaluated authority remains valid, then audit the outcome."""
+
+    # Exact types make every later attribute read return the value the seal or
+    # signature authenticates. A subclass could otherwise serve forged fields to the
+    # decision checks and genuine sealed fields to the authentication check.
+    if (
+        type(pipeline_result) is not PipelineResult
+        or type(pipeline_result.policy) is not PolicyDecision
+        or type(pipeline_result.detection) is not DetectionResult
+        or type(pipeline_result.audit_event) is not AuditEvent
+        or type(pipeline_result.audit_event.metadata) not in (dict, type(None))
+    ):
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=Decision.BLOCK,
+            reason="pipeline result is not an exact AgentShield evaluation record",
+        )
 
     decision = pipeline_result.policy.decision
     if (

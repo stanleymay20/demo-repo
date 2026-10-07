@@ -21,20 +21,12 @@ class ScopeStatus(str, Enum):
 
 @dataclass(frozen=True)
 class AuthorizationScope:
-    """Host-issued identity, capabilities and exact effects for one task/workflow.
-
-    ``issuer`` identifies the authority that minted the grant. ``principal`` identifies
-    the end-user/service on whose behalf the agent is acting, and ``tenant`` optionally
-    identifies the containing organization/account. Principal and tenant are part of the
-    cryptographic scope digest; they are not receipt-only labels.
-    """
+    """Host-issued capabilities and exact effects for one task/workflow."""
 
     grant_id: str
     allowed_capabilities: tuple[str, ...]
     issuer: str = "user"
     allowed_effects: tuple[str, ...] = ()
-    principal: str | None = None
-    tenant: str | None = None
 
     def __post_init__(self) -> None:
         grant_id = self.grant_id.strip()
@@ -45,12 +37,6 @@ class AuthorizationScope:
             raise ValueError("issuer must be non-empty")
         object.__setattr__(self, "grant_id", grant_id)
         object.__setattr__(self, "issuer", issuer)
-        for field in ("principal", "tenant"):
-            value = getattr(self, field)
-            if value is not None:
-                if type(value) is not str or not value.strip():
-                    raise ValueError(f"{field} must be a non-empty string when present")
-                object.__setattr__(self, field, value.strip())
         object.__setattr__(
             self,
             "allowed_capabilities",

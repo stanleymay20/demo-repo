@@ -1,13 +1,40 @@
 """AgentShield layered agent-security platform primitives."""
 
-from .audit import AuditEnvelope, AuditSigner, AuditTrail, AuditVerificationStatus
+from .anchors import (
+    AnchorPublication,
+    AnchorReceipt,
+    HeadAnchorPublisher,
+    HeadAnchorStatement,
+    anchor_statement_digest,
+    build_head_anchor_statement,
+    publish_head_anchor,
+)
+from .audit import (
+    AuditEnvelope,
+    AuditSigner,
+    AuditTrail,
+    AuditVerificationStatus,
+    ChainVerificationResult,
+    Ed25519AuditSigner,
+    Ed25519AuditVerifier,
+    verify_chain,
+)
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
 from .events import ExecutionAuditEvent, evaluation_digest
 from .effects import effect_digest, check_effect_scope
 from .pipeline import pipeline_result_digest, verify_in_process_evaluation
 from .policy import ActionRisk, ContentRisk, Decision, PolicyInput, decide
+from .postgres_audit import PostgresAuditTrail
 from .postgres_grants import PostgresGrantAuthority
 from .provenance import InputProvenance, TrustLevel
+from .receipts import (
+    EvidenceBundle,
+    EvidenceRecord,
+    build_bundle,
+    bundle_digest,
+    load_bundle,
+    verify_bundle,
+)
 from .review import ReviewApproval, ReviewSigner, ReviewVerifier, ReviewStatus
 from .signing import (
     EvaluationSignature,
@@ -19,20 +46,30 @@ from .tools import ToolManifest, ToolRegistry, ToolVerificationStatus
 
 __all__ = [
     "ActionRisk",
+    "AnchorPublication",
+    "AnchorReceipt",
     "AuditEnvelope",
     "AuditSigner",
     "AuditTrail",
     "AuditVerificationStatus",
     "AuthorizationScope",
+    "ChainVerificationResult",
     "ContentRisk",
     "Decision",
+    "Ed25519AuditSigner",
+    "Ed25519AuditVerifier",
     "EvaluationSignature",
     "EvaluationSignatureStatus",
     "EvaluationSigner",
     "EvaluationVerifier",
+    "EvidenceBundle",
+    "EvidenceRecord",
     "ExecutionAuditEvent",
+    "HeadAnchorPublisher",
+    "HeadAnchorStatement",
     "InputProvenance",
     "PolicyInput",
+    "PostgresAuditTrail",
     "PostgresGrantAuthority",
     "ReviewApproval",
     "ReviewSigner",
@@ -43,11 +80,19 @@ __all__ = [
     "ToolRegistry",
     "ToolVerificationStatus",
     "TrustLevel",
+    "anchor_statement_digest",
+    "build_bundle",
+    "build_head_anchor_statement",
+    "bundle_digest",
     "check_action_scope",
     "check_effect_scope",
     "effect_digest",
     "evaluation_digest",
+    "load_bundle",
     "pipeline_result_digest",
+    "publish_head_anchor",
+    "verify_bundle",
+    "verify_chain",
     "verify_in_process_evaluation",
     "decide",
 ]

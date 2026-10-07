@@ -78,10 +78,8 @@ class PostgresGrantAuthority:
     def _locked_chain(self, cur, grant_id: str) -> tuple[GrantRecord, ...]:
         chain = load_grant_chain(lambda key: self._read(cur, key), grant_id)
         if not chain or chain[-1].parent_grant_id is not None:
-            return chain  # missing/cyclic/over-depth ancestry will fail validation
+            return chain
         locked = []
-        # Parent links are immutable. Root-first locking gives all operations on
-        # one family a consistent order and prevents sibling budget races.
         for original in reversed(chain):
             current = self._read(cur, original.grant_id, lock=True)
             if current is None or current.parent_grant_id != original.parent_grant_id:
@@ -124,6 +122,8 @@ class PostgresGrantAuthority:
     ) -> GrantRecord:
         if ttl <= timedelta(0):
             raise ValueError("grant ttl must be positive")
+        if scope.delegator_agent_id is not None or scope.delegator_grant_id is not None:
+            raise ValueError("directly issued root authority cannot claim a delegator")
         with self._transaction() as cur:
             current = self._clock(cur)
             return self._insert(cur, GrantRecord(
@@ -153,7 +153,6 @@ class PostgresGrantAuthority:
     def consume(self, scope: AuthorizationScope):
         with self._transaction() as cur:
             chain = self._locked_chain(cur, scope.grant_id)
-            # Security time is sampled only after the full lineage is locked.
             current = self._clock(cur)
             status = verify_grant_chain(scope, chain, current)
             record = chain[0] if chain else None
@@ -174,7 +173,6 @@ class PostgresGrantAuthority:
     ) -> GrantRecord:
         with self._transaction() as cur:
             chain = self._locked_chain(cur, parent_scope.grant_id)
-            # Delegation validity and child issuance use the same database-owned clock.
             current = self._clock(cur)
             child = delegated_record(parent_scope, child_scope, chain, now=current, ttl=ttl)
             created = self._insert(cur, child)

@@ -22,6 +22,10 @@ class DetectionResult:
     def __post_init__(self) -> None:
         if self.score is not None and not 0.0 <= self.score <= 1.0:
             raise ValueError("score must be between 0 and 1")
+        if self.score == 0 and type(self.score) is float:
+            # -0.0 is in range but not representable in PostgreSQL JSONB evidence;
+            # normalize so durable evidence stays byte-faithful and verifiable.
+            object.__setattr__(self, "score", 0.0)
         if not self.detector_name.strip():
             raise ValueError("detector_name must be non-empty")
         if not self.detector_version.strip():

@@ -6,10 +6,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from .policy import ActionRisk, ContentRisk, PolicyDecision
+from .policy import ActionRisk, ContentRisk, POLICY_VERSION, PolicyDecision
 
 EVENT_SCHEMA_VERSION = "agentshield-audit-event-v1"
-EXECUTION_EVENT_SCHEMA_VERSION = "agentshield-execution-audit-event-v1"
+EXECUTION_EVENT_SCHEMA_VERSION = "agentshield-execution-audit-event-v2"
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ class AuditEvent:
 
 @dataclass(frozen=True)
 class ExecutionAuditEvent:
-    """No-raw-payload evidence for one execution lifecycle transition."""
+    """No-raw-payload evidence for one decision/execution lifecycle transition."""
 
     event_schema_version: str
     timestamp_utc: str
@@ -46,6 +46,7 @@ class ExecutionAuditEvent:
     status: str
     grant_id: str
     effect_digest: str
+    policy_version: str = POLICY_VERSION
     grant_record_digest: str | None = None
     review_approval_digest: str | None = None
     exception_class: str | None = None
@@ -102,16 +103,18 @@ def build_execution_audit_event(
     status: str,
     grant_id: str,
     effect_digest: str,
+    policy_version: str = POLICY_VERSION,
     grant_record_digest: str | None = None,
     review_approval_digest: str | None = None,
     exception_class: str | None = None,
 ) -> ExecutionAuditEvent:
-    """Create an execution event without raw input, payload, output, or exception text."""
+    """Create an evidence event without raw input, payload, output, or exception text."""
 
     for value, field in (
         (request_id, "request_id"), (evaluation_digest, "evaluation_digest"),
         (action_name, "action_name"), (decision, "decision"), (phase, "phase"),
         (status, "status"), (grant_id, "grant_id"), (effect_digest, "effect_digest"),
+        (policy_version, "policy_version"),
     ):
         if type(value) is not str or not value.strip():
             raise ValueError(f"{field} must be a non-empty string")
@@ -136,6 +139,7 @@ def build_execution_audit_event(
         status=status,
         grant_id=grant_id,
         effect_digest=effect_digest,
+        policy_version=policy_version,
         grant_record_digest=grant_record_digest,
         review_approval_digest=review_approval_digest,
         exception_class=exception_class,

@@ -8,10 +8,14 @@ on:
       - agentshield-ga-hardening-2026-09-29
       - agentshield-ga-integration-2026-09-29
       - agentshield-pr6-audit-remediation
+      - agentshield-verifiable-evidence-v1
     paths:
       - 'agentshield/platform/**'
       - 'agentshield/tests/**'
       - 'agentshield/__init__.py'
+      - 'agentshield/VERIFIABLE_EVIDENCE_V1.md'
+      - 'examples/agentshield_verifiable_block_demo.py'
+      - 'tools/agentshield_verify.py'
       - 'pyproject.toml'
       - 'SECURITY.md'
       - 'CONTRIBUTING.md'
@@ -21,6 +25,9 @@ on:
       - 'agentshield/platform/**'
       - 'agentshield/tests/**'
       - 'agentshield/__init__.py'
+      - 'agentshield/VERIFIABLE_EVIDENCE_V1.md'
+      - 'examples/agentshield_verifiable_block_demo.py'
+      - 'tools/agentshield_verify.py'
       - 'pyproject.toml'
       - 'SECURITY.md'
       - 'CONTRIBUTING.md'
@@ -61,7 +68,7 @@ jobs:
         run: python -m unittest discover -s agentshield/tests -p 'test_platform_*.py' -v
 
   postgres:
-    name: PostgreSQL atomic-grant integration
+    name: PostgreSQL grant + evidence integration
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -92,8 +99,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e '.[full]'
           python -m pip check
-      - name: Atomic grant tests
-        run: python -m unittest agentshield.tests.test_platform_postgres_grants -v
+      - name: PostgreSQL authority and evidence tests
+        run: python -m unittest discover -s agentshield/tests -p 'test_platform_postgres_*.py' -v
 
   package:
     name: Wheel / SBOM

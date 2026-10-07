@@ -1,7 +1,8 @@
 """Canonical integrity binding for AgentShield authorization inputs.
 
-Only hashes are stored in audit metadata; raw payload values and full grants are not
-persisted here. Inputs must be JSON-compatible so authorization and execution can
+Only hashes or privacy-safe authorization metadata are stored in audit evidence; raw
+payload values and full mutable runtime objects are not persisted here. Inputs must be
+JSON-compatible so authorization, execution and offline receipt verification can
 reproduce the same canonical representation deterministically.
 """
 
@@ -17,6 +18,8 @@ from .authorization import AuthorizationScope
 from .tools import ToolManifest
 
 MAX_PAYLOAD_DEPTH = 64
+SCOPE_SCHEMA_V3 = "agentshield-scope-v3"
+SCOPE_SCHEMA_V4 = "agentshield-scope-v4-agent-purpose"
 
 
 def snapshot_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -94,15 +97,39 @@ def action_digest(action: ActionDescriptor) -> str:
     return hashlib.sha256(_canonical_json(material)).hexdigest()
 
 
-def scope_digest(scope: AuthorizationScope) -> str:
-    material = {
-        "scope_schema": "agentshield-scope-v2",
+def scope_material(scope: AuthorizationScope) -> dict[str, Any]:
+    """Return the privacy-safe canonical material committed by ``scope_digest``.
+
+    Legacy scopes remain v3 so previously issued pre-agent-identity grants do not silently
+    acquire claims they never carried. A scope that explicitly binds ``agent_id`` and
+    host-controlled ``purpose_id`` uses v4 and also commits the immediate delegator agent
+    and parent grant. Exact effects remain SHA-256 commitments; no raw payload is exposed.
+    """
+
+    material: dict[str, Any] = {
+        "scope_schema": SCOPE_SCHEMA_V3,
         "grant_id": scope.grant_id,
         "issuer": scope.issuer,
+        "principal": scope.principal,
+        "tenant": scope.tenant,
         "allowed_capabilities": list(scope.allowed_capabilities),
         "allowed_effects": list(scope.allowed_effects),
     }
-    return hashlib.sha256(_canonical_json(material)).hexdigest()
+    if scope.machine_identity_bound:
+        material.update(
+            {
+                "scope_schema": SCOPE_SCHEMA_V4,
+                "agent_id": scope.agent_id,
+                "purpose_id": scope.purpose_id,
+                "delegator_agent_id": scope.delegator_agent_id,
+                "delegator_grant_id": scope.delegator_grant_id,
+            }
+        )
+    return material
+
+
+def scope_digest(scope: AuthorizationScope) -> str:
+    return hashlib.sha256(_canonical_json(scope_material(scope))).hexdigest()
 
 
 def tool_manifest_digest(manifest: ToolManifest) -> str:

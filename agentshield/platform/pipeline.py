@@ -7,6 +7,10 @@ that no model output becomes authorization by accident.
 Pipeline results produced in-process are sealed with a process-local integrity tag. The
 tag is intentionally not a cross-service credential; detached evaluations must use the
 optional Ed25519 signing path.
+
+When an ``AuditTrail`` is supplied, every authenticated policy decision (ALLOW, REVIEW or
+BLOCK) is appended before the result is returned. A durable sink failure therefore stops
+the governed flow before execution can begin.
 """
 
 from __future__ import annotations
@@ -18,12 +22,19 @@ import secrets
 from typing import Any, Mapping
 
 from .actions import ActionDescriptor, classify_action
+from .audit import AuditTrail
 from .authorization import AuthorizationScope, ScopeStatus, check_action_scope
 from .detectors import DetectionResult, Detector
 from .events import AuditEvent, build_audit_event
 from .effects import check_effect_scope, effect_digest_from_payload_digest
 from .grants import GrantAuthorityProtocol, GrantStatus, grant_record_digest
-from .integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
+from .integrity import (
+    action_digest,
+    payload_digest,
+    scope_digest,
+    scope_material,
+    tool_manifest_digest,
+)
 from .policy import PolicyDecision, PolicyInput, decide
 from .provenance import InputProvenance, TrustLevel
 from .tools import ToolRegistry, ToolVerificationStatus, verify_action_descriptor
@@ -100,11 +111,15 @@ def evaluate_request(
     authorization_scope: AuthorizationScope | None = None,
     tool_registry: ToolRegistry | None = None,
     grant_authority: GrantAuthorityProtocol | None = None,
+    audit_trail: AuditTrail | None = None,
 ) -> PipelineResult:
-    """Evaluate one proposed action against risk, authority, scope and tool metadata."""
+    """Evaluate one proposed action against risk, authority, scope and tool metadata.
 
-    # Bind the submitted effect before any detector/authority callback can change
-    # caller-owned payload state. Invalid payloads never reach those callbacks.
+    When ``audit_trail`` is provided, the complete policy decision event is synchronously
+    chained before this function returns. This is the evidence-mode path used to produce
+    verifiable proof of ALLOW, REVIEW and BLOCK decisions.
+    """
+
     submitted_payload_digest = payload_digest(payload)
     if type(content) is not str:
         raise ValueError("content must be a plain string")
@@ -190,10 +205,19 @@ def evaluate_request(
         "effect_status": effect_status.value,
     }
     if authorization_scope is not None:
+        material = scope_material(authorization_scope)
         metadata.update(
             {
                 "authorization_grant_id": authorization_scope.grant_id,
                 "authorization_scope_digest": scope_digest(authorization_scope),
+                "authorization_scope_material": material,
+                "authorization_issuer": authorization_scope.issuer,
+                "authorization_principal": authorization_scope.principal,
+                "authorization_tenant": authorization_scope.tenant,
+                "authorization_agent_id": authorization_scope.agent_id,
+                "authorization_purpose_id": authorization_scope.purpose_id,
+                "authorization_delegator_agent_id": authorization_scope.delegator_agent_id,
+                "authorization_delegator_grant_id": authorization_scope.delegator_grant_id,
             }
         )
     if grant_record is not None:
@@ -228,4 +252,7 @@ def evaluate_request(
         policy=policy_decision,
         audit_event=event,
     )
-    return replace(result, _integrity_tag=_integrity_tag(result))
+    sealed = replace(result, _integrity_tag=_integrity_tag(result))
+    if audit_trail is not None:
+        audit_trail.append(event)
+    return sealed

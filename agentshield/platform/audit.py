@@ -1,13 +1,12 @@
 """Tamper-evident audit envelopes and chained trails for AgentShield.
 
-Raw untrusted content is intentionally outside this format. The signer authenticates a
-canonical event hash and chains each envelope to the previous envelope. ``AuditTrail``
-serializes appends and can synchronously hand every sealed event to a host persistence
-sink (database, append-only object store, SIEM, transparency service, etc.).
+Raw untrusted content is intentionally outside this format. The evidence layer supports
+both the legacy/internal HMAC signer and an Ed25519 signer/verifier split for evidence
+that third parties can verify without receiving a forging secret.
 
-HMAC chaining detects modification/reordering. Production deployments should persist and
-periodically anchor the latest envelope hash outside the runtime writer's control to make
-tail truncation detectable across process loss or compromise.
+Production deployments should durably persist envelopes/events and periodically anchor
+the latest envelope hash outside the runtime writer's control so tail truncation can be
+detected across process loss or compromise.
 """
 
 from __future__ import annotations
@@ -18,10 +17,13 @@ import hashlib
 import hmac
 import json
 from threading import RLock
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 
-AUDIT_ENVELOPE_SCHEMA_VERSION = "agentshield-audit-envelope-v1"
+AUDIT_ENVELOPE_SCHEMA_VERSION = "agentshield-audit-envelope-v2"
+HMAC_ALGORITHM = "hmac-sha256"
+ED25519_ALGORITHM = "ed25519"
+_HEX = frozenset("0123456789abcdef")
 
 
 class AuditVerificationStatus(str, Enum):
@@ -29,6 +31,8 @@ class AuditVerificationStatus(str, Enum):
     UNKNOWN_KEY = "unknown_key"
     EVENT_MISMATCH = "event_mismatch"
     CHAIN_MISMATCH = "chain_mismatch"
+    ALGORITHM_MISMATCH = "algorithm_mismatch"
+    SCHEMA_MISMATCH = "schema_mismatch"
     INVALID_SIGNATURE = "invalid_signature"
 
 
@@ -40,15 +44,29 @@ class AuditEnvelope:
     event_hash: str
     key_id: str
     signature: str
+    algorithm: str = HMAC_ALGORITHM
 
     def __post_init__(self) -> None:
         if self.sequence < 0:
             raise ValueError("sequence must be non-negative")
         if not self.event_hash.strip() or not self.key_id.strip() or not self.signature.strip():
             raise ValueError("event_hash, key_id and signature must be non-empty")
+        if self.algorithm not in {HMAC_ALGORITHM, ED25519_ALGORITHM}:
+            raise ValueError("unsupported audit signature algorithm")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ChainVerificationResult:
+    status: AuditVerificationStatus
+    verified_count: int
+    first_invalid_index: int | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.status is AuditVerificationStatus.VALID
 
 
 def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
@@ -79,8 +97,51 @@ def envelope_hash(envelope: AuditEnvelope) -> str:
     return hashlib.sha256(_canonical_bytes(envelope.to_dict())).hexdigest()
 
 
+def _signature_material(
+    *,
+    schema_version: str,
+    algorithm: str,
+    sequence: int,
+    previous_envelope_hash: str | None,
+    event_hash_value: str,
+    key_id: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": schema_version,
+        "algorithm": algorithm,
+        "sequence": sequence,
+        "previous_envelope_hash": previous_envelope_hash,
+        "event_hash": event_hash_value,
+        "key_id": key_id,
+    }
+
+
+def _canonical_ed25519_signature(value: Any) -> bool:
+    return type(value) is str and len(value) == 128 and all(char in _HEX for char in value)
+
+
+def _cryptography():
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey,
+            Ed25519PublicKey,
+        )
+    except ImportError as exc:  # pragma: no cover - dependency-free install path
+        raise RuntimeError(
+            "Ed25519 audit evidence requires agentshield-runtime[signing]"
+        ) from exc
+    return InvalidSignature, serialization, Ed25519PrivateKey, Ed25519PublicKey
+
+
 class AuditSigner:
-    """HMAC signer with key rotation and previous-envelope chaining."""
+    """Legacy/internal HMAC signer.
+
+    HMAC is retained for dependency-free local integrity only. Do not give its secret key
+    to an independent auditor: possession of that key also permits forging records.
+    Use :class:`Ed25519AuditSigner` for portable third-party-verifiable evidence.
+    """
 
     def __init__(self, keys: Mapping[str, bytes], *, active_key_id: str) -> None:
         clean = dict(keys)
@@ -94,23 +155,6 @@ class AuditSigner:
         self._keys = clean
         self._active_key_id = active_key_id
 
-    @staticmethod
-    def _signature_material(
-        *,
-        schema_version: str,
-        sequence: int,
-        previous_envelope_hash: str | None,
-        event_hash_value: str,
-        key_id: str,
-    ) -> dict[str, Any]:
-        return {
-            "schema_version": schema_version,
-            "sequence": sequence,
-            "previous_envelope_hash": previous_envelope_hash,
-            "event_hash": event_hash_value,
-            "key_id": key_id,
-        }
-
     def seal(
         self,
         event: Any,
@@ -120,8 +164,9 @@ class AuditSigner:
     ) -> AuditEnvelope:
         previous_hash = None if previous is None else envelope_hash(previous)
         ev_hash = event_hash(event)
-        material = self._signature_material(
+        material = _signature_material(
             schema_version=AUDIT_ENVELOPE_SCHEMA_VERSION,
+            algorithm=HMAC_ALGORITHM,
             sequence=sequence,
             previous_envelope_hash=previous_hash,
             event_hash_value=ev_hash,
@@ -139,6 +184,7 @@ class AuditSigner:
             event_hash=ev_hash,
             key_id=self._active_key_id,
             signature=signature,
+            algorithm=HMAC_ALGORITHM,
         )
 
     def verify(
@@ -148,11 +194,17 @@ class AuditSigner:
         *,
         previous: AuditEnvelope | None = None,
     ) -> AuditVerificationStatus:
+        if envelope.schema_version != AUDIT_ENVELOPE_SCHEMA_VERSION:
+            return AuditVerificationStatus.SCHEMA_MISMATCH
+        if envelope.algorithm != HMAC_ALGORITHM:
+            return AuditVerificationStatus.ALGORITHM_MISMATCH
         key = self._keys.get(envelope.key_id)
         if key is None:
             return AuditVerificationStatus.UNKNOWN_KEY
         if envelope.event_hash != event_hash(event):
             return AuditVerificationStatus.EVENT_MISMATCH
+        if previous is None and envelope.sequence != 0:
+            return AuditVerificationStatus.CHAIN_MISMATCH
 
         expected_previous = None if previous is None else envelope_hash(previous)
         if envelope.previous_envelope_hash != expected_previous:
@@ -160,8 +212,9 @@ class AuditSigner:
         if previous is not None and envelope.sequence != previous.sequence + 1:
             return AuditVerificationStatus.CHAIN_MISMATCH
 
-        material = self._signature_material(
+        material = _signature_material(
             schema_version=envelope.schema_version,
+            algorithm=envelope.algorithm,
             sequence=envelope.sequence,
             previous_envelope_hash=envelope.previous_envelope_hash,
             event_hash_value=envelope.event_hash,
@@ -177,18 +230,130 @@ class AuditSigner:
         return AuditVerificationStatus.VALID
 
 
+class Ed25519AuditSigner:
+    """Evidence-writer-only signer holding Ed25519 private keys."""
+
+    def __init__(self, private_keys: Mapping[str, bytes], *, active_key_id: str) -> None:
+        _, _, PrivateKey, _ = _cryptography()
+        clean = dict(private_keys)
+        if not clean or active_key_id not in clean:
+            raise ValueError("active_key_id must reference a configured audit private key")
+        self._keys = {}
+        for key_id, raw in clean.items():
+            if not key_id.strip() or len(raw) != 32:
+                raise ValueError("Ed25519 private keys must be 32 raw bytes with a non-empty id")
+            self._keys[key_id] = PrivateKey.from_private_bytes(raw)
+        self._active_key_id = active_key_id
+
+    def seal(
+        self,
+        event: Any,
+        *,
+        sequence: int,
+        previous: AuditEnvelope | None = None,
+    ) -> AuditEnvelope:
+        previous_hash = None if previous is None else envelope_hash(previous)
+        ev_hash = event_hash(event)
+        material = _signature_material(
+            schema_version=AUDIT_ENVELOPE_SCHEMA_VERSION,
+            algorithm=ED25519_ALGORITHM,
+            sequence=sequence,
+            previous_envelope_hash=previous_hash,
+            event_hash_value=ev_hash,
+            key_id=self._active_key_id,
+        )
+        signature = self._keys[self._active_key_id].sign(_canonical_bytes(material)).hex()
+        return AuditEnvelope(
+            schema_version=AUDIT_ENVELOPE_SCHEMA_VERSION,
+            sequence=sequence,
+            previous_envelope_hash=previous_hash,
+            event_hash=ev_hash,
+            key_id=self._active_key_id,
+            signature=signature,
+            algorithm=ED25519_ALGORITHM,
+        )
+
+    def public_keys(self) -> dict[str, bytes]:
+        _, serialization, _, _ = _cryptography()
+        return {
+            key_id: key.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+            for key_id, key in self._keys.items()
+        }
+
+
+class Ed25519AuditVerifier:
+    """Independent verifier containing only public keys and no signing authority."""
+
+    def __init__(self, public_keys: Mapping[str, bytes]) -> None:
+        _, _, _, PublicKey = _cryptography()
+        clean = dict(public_keys)
+        if not clean:
+            raise ValueError("at least one audit public key is required")
+        self._keys = {}
+        for key_id, raw in clean.items():
+            if not key_id.strip() or len(raw) != 32:
+                raise ValueError("Ed25519 public keys must be 32 raw bytes with a non-empty id")
+            self._keys[key_id] = PublicKey.from_public_bytes(raw)
+
+    def verify(
+        self,
+        envelope: AuditEnvelope,
+        event: Any,
+        *,
+        previous: AuditEnvelope | None = None,
+    ) -> AuditVerificationStatus:
+        if envelope.schema_version != AUDIT_ENVELOPE_SCHEMA_VERSION:
+            return AuditVerificationStatus.SCHEMA_MISMATCH
+        if envelope.algorithm != ED25519_ALGORITHM:
+            return AuditVerificationStatus.ALGORITHM_MISMATCH
+        if not _canonical_ed25519_signature(envelope.signature):
+            return AuditVerificationStatus.INVALID_SIGNATURE
+        key = self._keys.get(envelope.key_id)
+        if key is None:
+            return AuditVerificationStatus.UNKNOWN_KEY
+        if envelope.event_hash != event_hash(event):
+            return AuditVerificationStatus.EVENT_MISMATCH
+        if previous is None and envelope.sequence != 0:
+            return AuditVerificationStatus.CHAIN_MISMATCH
+
+        expected_previous = None if previous is None else envelope_hash(previous)
+        if envelope.previous_envelope_hash != expected_previous:
+            return AuditVerificationStatus.CHAIN_MISMATCH
+        if previous is not None and envelope.sequence != previous.sequence + 1:
+            return AuditVerificationStatus.CHAIN_MISMATCH
+
+        material = _signature_material(
+            schema_version=envelope.schema_version,
+            algorithm=envelope.algorithm,
+            sequence=envelope.sequence,
+            previous_envelope_hash=envelope.previous_envelope_hash,
+            event_hash_value=envelope.event_hash,
+            key_id=envelope.key_id,
+        )
+        try:
+            signature = bytes.fromhex(envelope.signature)
+        except ValueError:
+            return AuditVerificationStatus.INVALID_SIGNATURE
+        InvalidSignature, _, _, _ = _cryptography()
+        try:
+            key.verify(signature, _canonical_bytes(material))
+        except InvalidSignature:
+            return AuditVerificationStatus.INVALID_SIGNATURE
+        return AuditVerificationStatus.VALID
+
+
 AuditSink = Callable[[AuditEnvelope, Any], None]
 
 
 class AuditTrail:
-    """Concurrency-safe append-only envelope chain with optional synchronous persistence.
+    """Concurrency-safe append-only envelope chain with optional synchronous persistence."""
 
-    The trail keeps a local copy for verification/testing and invokes ``sink`` before the
-    append is acknowledged to the caller. A production sink should durably persist both
-    envelope and event and separately anchor the head hash on an operational cadence.
-    """
-
-    def __init__(self, signer: AuditSigner, *, sink: AuditSink | None = None) -> None:
+    def __init__(self, signer: Any, *, sink: AuditSink | None = None) -> None:
+        if not hasattr(signer, "seal"):
+            raise TypeError("audit signer must expose seal()")
         self._signer = signer
         self._sink = sink
         self._events: list[Any] = []
@@ -223,3 +388,35 @@ class AuditTrail:
     def events(self) -> tuple[Any, ...]:
         with self._lock:
             return tuple(self._events)
+
+
+def verify_chain(
+    verifier: Any,
+    envelopes: Sequence[AuditEnvelope],
+    events: Sequence[Any],
+) -> ChainVerificationResult:
+    """Verify an entire audit chain and identify the first broken record."""
+
+    if len(envelopes) != len(events):
+        return ChainVerificationResult(
+            AuditVerificationStatus.CHAIN_MISMATCH,
+            verified_count=min(len(envelopes), len(events)),
+            first_invalid_index=min(len(envelopes), len(events)),
+        )
+    previous: AuditEnvelope | None = None
+    for index, (envelope, event) in enumerate(zip(envelopes, events)):
+        if envelope.sequence != index:
+            return ChainVerificationResult(
+                AuditVerificationStatus.CHAIN_MISMATCH,
+                verified_count=index,
+                first_invalid_index=index,
+            )
+        status = verifier.verify(envelope, event, previous=previous)
+        if status is not AuditVerificationStatus.VALID:
+            return ChainVerificationResult(status, verified_count=index, first_invalid_index=index)
+        previous = envelope
+    return ChainVerificationResult(
+        AuditVerificationStatus.VALID,
+        verified_count=len(envelopes),
+        first_invalid_index=None,
+    )

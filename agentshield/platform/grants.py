@@ -131,6 +131,10 @@ def verify_grant_chain(
         return GrantStatus.MISMATCH
     if chain[-1].parent_grant_id is not None:
         return GrantStatus.ANCESTOR_INVALID
+    # Legacy v3 child scopes never carried the parent grant id. Machine-bound v4 scopes
+    # do, so only v4 can be independently checked against the durable lineage record here.
+    if scope.machine_identity_bound and scope.delegator_grant_id != leaf.parent_grant_id:
+        return GrantStatus.MISMATCH
     for index, record in enumerate(chain):
         if not record.single_use:
             status = GrantStatus.REUSABLE_UNSUPPORTED
@@ -160,7 +164,12 @@ def delegated_record(
     parent_scope: AuthorizationScope, child_scope: AuthorizationScope,
     chain: tuple[GrantRecord, ...], *, now: datetime, ttl: timedelta,
 ) -> GrantRecord:
-    """Validate attenuation and construct a child; caller must transfer atomically."""
+    """Validate attenuation and construct a child; caller must transfer atomically.
+
+    Legacy v3 authority stays legacy during delegation. A machine-bound v4 parent may
+    delegate to another agent, but the child must preserve principal, tenant and purpose,
+    and must commit the parent's agent id and grant id as the immediate delegation link.
+    """
     if verify_grant_chain(parent_scope, chain, now) is not GrantStatus.VALID:
         raise ValueError("parent grant is not valid for delegation")
     parent = chain[0]
@@ -168,9 +177,27 @@ def delegated_record(
         raise ValueError("delegation requires a single-use parent")
     if len(chain) > MAX_DELEGATION_DEPTH:
         raise ValueError("maximum delegation depth exceeded")
-    if (child_scope.grant_id == parent_scope.grant_id
-            or child_scope.issuer != parent_scope.issuer):
-        raise ValueError("child needs a fresh id and the same originating issuer")
+    if (
+        child_scope.grant_id == parent_scope.grant_id
+        or child_scope.issuer != parent_scope.issuer
+        or child_scope.principal != parent_scope.principal
+        or child_scope.tenant != parent_scope.tenant
+    ):
+        raise ValueError(
+            "child needs a fresh id and must preserve originating issuer, principal and tenant"
+        )
+    if parent_scope.machine_identity_bound:
+        if (
+            not child_scope.machine_identity_bound
+            or child_scope.purpose_id != parent_scope.purpose_id
+            or child_scope.delegator_agent_id != parent_scope.agent_id
+            or child_scope.delegator_grant_id != parent_scope.grant_id
+        ):
+            raise ValueError(
+                "machine-bound child must preserve purpose and bind the parent agent and grant"
+            )
+    elif child_scope.machine_identity_bound:
+        raise ValueError("legacy authority cannot acquire machine identity during delegation")
     if (not child_scope.allowed_capabilities
             or not set(child_scope.allowed_capabilities).issubset(parent_scope.allowed_capabilities)
             or not child_scope.allowed_effects
@@ -209,6 +236,8 @@ class GrantAuthority:
     ) -> GrantRecord:
         if ttl <= timedelta(0):
             raise ValueError("grant ttl must be positive")
+        if scope.delegator_agent_id is not None or scope.delegator_grant_id is not None:
+            raise ValueError("directly issued root authority cannot claim a delegator")
         with self._lock:
             if scope.grant_id in self._records:
                 raise ValueError("grant_id already exists")

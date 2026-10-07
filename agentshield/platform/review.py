@@ -19,6 +19,20 @@ import secrets
 from typing import Any, Callable, Mapping
 
 
+REVIEW_SCHEMA_VERSION = "agentshield-review-v3-ed25519"
+_HEX = frozenset("0123456789abcdef")
+
+
+def canonical_review_signature(value: Any) -> bool:
+    """Accept only the signer-produced encoding: 128 lowercase hex characters.
+
+    ``review_approval_digest`` commits the signature text. Accepting alternate encodings
+    of the same Ed25519 bytes (uppercase, embedded whitespace) would let one signed
+    approval carry several accepted digests in execution evidence.
+    """
+    return type(value) is str and len(value) == 128 and all(char in _HEX for char in value)
+
+
 class ReviewStatus(str, Enum):
     VALID = "valid"
     UNKNOWN_KEY = "unknown_key"
@@ -66,10 +80,17 @@ class ReviewApproval:
             if not value.strip():
                 raise ValueError(f"{field} must be non-empty")
 
+    def to_dict(self) -> dict[str, Any]:
+        """Return the exact portable signed approval representation."""
+        material = review_approval_material(self)
+        material["signature"] = self.signature
+        return material
 
-def _material(approval: ReviewApproval) -> dict[str, Any]:
+
+def review_approval_material(approval: ReviewApproval) -> dict[str, Any]:
+    """Return the canonical bytes-to-sign material for one human approval."""
     return {
-        "review_schema": "agentshield-review-v3-ed25519",
+        "review_schema": REVIEW_SCHEMA_VERSION,
         "evaluation_digest": approval.evaluation_digest,
         "approval_id": approval.approval_id,
         "request_id": approval.request_id,
@@ -96,9 +117,51 @@ def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
 
 
 def review_approval_digest(approval: ReviewApproval) -> str:
-    material = _material(approval)
-    material["signature"] = approval.signature
-    return hashlib.sha256(_canonical_bytes(material)).hexdigest()
+    return hashlib.sha256(_canonical_bytes(approval.to_dict())).hexdigest()
+
+
+def load_review_approval(value: Mapping[str, Any]) -> ReviewApproval:
+    """Parse a portable approval without trusting its signature."""
+    if type(value) is not dict:
+        raise ValueError("review approval proof must be an object")
+    expected = {
+        "review_schema", "evaluation_digest", "approval_id", "request_id",
+        "action_digest", "payload_digest", "scope_digest", "tool_manifest_digest",
+        "policy_version", "reviewer", "issued_at_utc", "expires_at_utc", "key_id",
+        "signature",
+    }
+    if set(value) != expected or value.get("review_schema") != REVIEW_SCHEMA_VERSION:
+        raise ValueError("unsupported or malformed review approval proof")
+    try:
+        issued = datetime.fromisoformat(value["issued_at_utc"])
+        expires = datetime.fromisoformat(value["expires_at_utc"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("review approval timestamps are invalid") from exc
+    try:
+        approval = ReviewApproval(
+            approval_id=value["approval_id"],
+            request_id=value["request_id"],
+            action_digest=value["action_digest"],
+            payload_digest=value["payload_digest"],
+            scope_digest=value["scope_digest"],
+            tool_manifest_digest=value["tool_manifest_digest"],
+            policy_version=value["policy_version"],
+            evaluation_digest=value["evaluation_digest"],
+            reviewer=value["reviewer"],
+            issued_at_utc=issued,
+            expires_at_utc=expires,
+            key_id=value["key_id"],
+            signature=value["signature"],
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("review approval proof fields are invalid") from exc
+    # The portable proof must be byte-for-byte the canonical signed representation.
+    # Otherwise a relayer can re-encode timestamps (or the signature) so the accepted
+    # proof differs from the exact bytes the reviewer signed, and independent verifiers
+    # that hash the literal proof disagree with ones that normalize it first.
+    if not canonical_review_signature(approval.signature) or approval.to_dict() != value:
+        raise ValueError("review approval proof is not in canonical signed form")
+    return approval
 
 
 def _cryptography():
@@ -175,7 +238,9 @@ class ReviewSigner:
             expires_at_utc=issued_at + ttl,
             key_id=self._active_key_id,
         )
-        signature = self._keys[self._active_key_id].sign(_canonical_bytes(_material(approval))).hex()
+        signature = self._keys[self._active_key_id].sign(
+            _canonical_bytes(review_approval_material(approval))
+        ).hex()
         return replace(approval, signature=signature)
 
     def public_keys(self) -> dict[str, bytes]:
@@ -209,6 +274,21 @@ class ReviewVerifier:
             self._keys[key_id] = PublicKey.from_public_bytes(raw)
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
+    def verify_signature(self, approval: ReviewApproval) -> ReviewStatus:
+        """Verify approval authorship without applying current-time semantics."""
+        key = self._keys.get(approval.key_id)
+        if key is None:
+            return ReviewStatus.UNKNOWN_KEY
+        if not canonical_review_signature(approval.signature):
+            return ReviewStatus.INVALID_SIGNATURE
+        signature = bytes.fromhex(approval.signature)
+        InvalidSignature, _, _, _ = _cryptography()
+        try:
+            key.verify(signature, _canonical_bytes(review_approval_material(approval)))
+        except InvalidSignature:
+            return ReviewStatus.INVALID_SIGNATURE
+        return ReviewStatus.VALID
+
     def verify(
         self,
         approval: ReviewApproval,
@@ -221,18 +301,9 @@ class ReviewVerifier:
         policy_version: str,
         evaluation_digest: str,
     ) -> ReviewStatus:
-        key = self._keys.get(approval.key_id)
-        if key is None:
-            return ReviewStatus.UNKNOWN_KEY
-        try:
-            signature = bytes.fromhex(approval.signature)
-        except ValueError:
-            return ReviewStatus.INVALID_SIGNATURE
-        InvalidSignature, _, _, _ = _cryptography()
-        try:
-            key.verify(signature, _canonical_bytes(_material(replace(approval, signature=""))))
-        except InvalidSignature:
-            return ReviewStatus.INVALID_SIGNATURE
+        signature_status = self.verify_signature(approval)
+        if signature_status is not ReviewStatus.VALID:
+            return signature_status
         current = _normalize_clock(self._clock)
         if current < approval.issued_at_utc:
             return ReviewStatus.NOT_YET_VALID

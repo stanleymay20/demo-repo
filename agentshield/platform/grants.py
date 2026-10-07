@@ -168,9 +168,15 @@ def delegated_record(
         raise ValueError("delegation requires a single-use parent")
     if len(chain) > MAX_DELEGATION_DEPTH:
         raise ValueError("maximum delegation depth exceeded")
-    if (child_scope.grant_id == parent_scope.grant_id
-            or child_scope.issuer != parent_scope.issuer):
-        raise ValueError("child needs a fresh id and the same originating issuer")
+    if (
+        child_scope.grant_id == parent_scope.grant_id
+        or child_scope.issuer != parent_scope.issuer
+        or child_scope.principal != parent_scope.principal
+        or child_scope.tenant != parent_scope.tenant
+    ):
+        raise ValueError(
+            "child needs a fresh id and must preserve originating issuer, principal and tenant"
+        )
     if (not child_scope.allowed_capabilities
             or not set(child_scope.allowed_capabilities).issubset(parent_scope.allowed_capabilities)
             or not child_scope.allowed_effects

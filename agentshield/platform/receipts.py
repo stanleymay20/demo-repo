@@ -37,16 +37,13 @@ from .review import (
 
 BUNDLE_SCHEMA_VERSION = "agentshield-evidence-bundle-v1"
 RECEIPT_PROFILE = "agentshield-verifiable-action-receipt-v1"
-SCOPE_SCHEMA_VERSION = "agentshield-scope-v3"
-_SCOPE_KEYS = {
-    "scope_schema",
-    "grant_id",
-    "issuer",
-    "principal",
-    "tenant",
-    "allowed_capabilities",
-    "allowed_effects",
+SCOPE_SCHEMA_V3 = "agentshield-scope-v3"
+SCOPE_SCHEMA_V4 = "agentshield-scope-v4-agent-purpose"
+_SCOPE_KEYS_V3 = {
+    "scope_schema", "grant_id", "issuer", "principal", "tenant",
+    "allowed_capabilities", "allowed_effects",
 }
+_SCOPE_KEYS_V4 = _SCOPE_KEYS_V3 | {"agent_id", "purpose_id", "delegator_agent_id"}
 _HEX = frozenset("0123456789abcdef")
 
 
@@ -123,20 +120,30 @@ def _valid_hex_digest(value: Any) -> bool:
     return type(value) is str and len(value) == 64 and all(char in _HEX for char in value)
 
 
+def _valid_optional_identity(value: Any) -> bool:
+    return value is None or (type(value) is str and bool(value.strip()) and value == value.strip())
+
+
 def _valid_scope_material(value: Any) -> bool:
-    if type(value) is not dict or set(value) != _SCOPE_KEYS:
+    if type(value) is not dict:
         return False
-    if value.get("scope_schema") != SCOPE_SCHEMA_VERSION:
+    schema = value.get("scope_schema")
+    expected_keys = _SCOPE_KEYS_V4 if schema == SCOPE_SCHEMA_V4 else _SCOPE_KEYS_V3
+    if schema not in {SCOPE_SCHEMA_V3, SCOPE_SCHEMA_V4} or set(value) != expected_keys:
         return False
     for field in ("grant_id", "issuer"):
         item = value.get(field)
         if type(item) is not str or not item.strip() or item != item.strip():
             return False
     for field in ("principal", "tenant"):
-        item = value.get(field)
-        if item is not None and (
-            type(item) is not str or not item.strip() or item != item.strip()
-        ):
+        if not _valid_optional_identity(value.get(field)):
+            return False
+    if schema == SCOPE_SCHEMA_V4:
+        for field in ("agent_id", "purpose_id"):
+            item = value.get(field)
+            if type(item) is not str or not item.strip() or item != item.strip():
+                return False
+        if not _valid_optional_identity(value.get("delegator_agent_id")):
             return False
     capabilities = value.get("allowed_capabilities")
     if type(capabilities) is not list or any(type(item) is not str for item in capabilities):
@@ -167,6 +174,9 @@ def _scope_evidence_valid(event: Mapping[str, Any]) -> bool:
         "authorization_issuer": material["issuer"],
         "authorization_principal": material["principal"],
         "authorization_tenant": material["tenant"],
+        "authorization_agent_id": material.get("agent_id"),
+        "authorization_purpose_id": material.get("purpose_id"),
+        "authorization_delegator_agent_id": material.get("delegator_agent_id"),
     }
     return all(metadata.get(field) == value for field, value in expected_metadata.items())
 

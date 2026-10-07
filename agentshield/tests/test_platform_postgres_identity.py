@@ -65,6 +65,61 @@ class PostgresIdentityBindingTests(unittest.TestCase):
         self.authority.delegate(self.scope, child)
         self.assertIs(self.authority.verify(child)[0], GrantStatus.VALID)
 
+    def test_machine_delegation_preserves_purpose_and_parent_agent_across_workers(self):
+        parent = AuthorizationScope(
+            "machine-root",
+            ("read_data", "transform_text"),
+            issuer="policy-service",
+            allowed_effects=("a" * 64, "b" * 64),
+            principal="employee-42",
+            tenant="company-7",
+            agent_id="orchestrator-agent",
+            purpose_id="incident-2026-441",
+        )
+        child = replace(
+            parent,
+            grant_id="machine-child",
+            allowed_capabilities=("read_data",),
+            allowed_effects=("a" * 64,),
+            agent_id="research-agent",
+            delegator_agent_id="orchestrator-agent",
+        )
+        self.authority.issue(parent)
+        other = PostgresGrantAuthority(self._connect, table_name=self.table)
+
+        for forged in (
+            replace(child, purpose_id="unrelated-purpose"),
+            replace(child, delegator_agent_id="attacker-agent"),
+            replace(child, agent_id=None, purpose_id=None, delegator_agent_id=None),
+        ):
+            with self.subTest(forged=forged), self.assertRaises(ValueError):
+                other.delegate(parent, forged)
+            self.assertIs(self.authority.verify(parent)[0], GrantStatus.VALID)
+
+        created = other.delegate(parent, child)
+        self.assertEqual(created.parent_grant_id, parent.grant_id)
+        self.assertIs(self.authority.verify(child)[0], GrantStatus.VALID)
+
+        forged_agent = replace(child, agent_id="attacker-agent")
+        self.assertIs(other.verify(forged_agent)[0], GrantStatus.MISMATCH)
+        self.assertIs(other.consume(forged_agent)[0], GrantStatus.MISMATCH)
+        self.assertIs(other.verify(child)[0], GrantStatus.VALID)
+
+    def test_legacy_postgres_authority_cannot_gain_machine_identity_by_delegation(self):
+        self.authority.issue(self.scope)
+        child = replace(
+            self.scope,
+            grant_id="machine-child",
+            allowed_capabilities=("read_data",),
+            allowed_effects=("a" * 64,),
+            agent_id="new-agent",
+            purpose_id="new-purpose",
+            delegator_agent_id="legacy-parent-agent",
+        )
+        with self.assertRaises(ValueError):
+            self.authority.delegate(self.scope, child)
+        self.assertIs(self.authority.verify(self.scope)[0], GrantStatus.VALID)
+
 
 if __name__ == "__main__":
     unittest.main()

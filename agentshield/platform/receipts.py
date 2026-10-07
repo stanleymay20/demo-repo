@@ -37,6 +37,23 @@ from .review import (
 
 BUNDLE_SCHEMA_VERSION = "agentshield-evidence-bundle-v1"
 RECEIPT_PROFILE = "agentshield-verifiable-action-receipt-v1"
+POLICY_EVENT_SCHEMA = "agentshield-audit-event-v1"
+EXECUTION_EVENT_SCHEMA = "agentshield-execution-audit-event-v2"
+_BUNDLE_KEYS = {"schema_version", "receipt_profile", "exported_at_utc", "records"}
+_RECORD_KEYS = {"record_type", "event", "envelope"}
+_ENVELOPE_KEYS = {
+    "schema_version", "sequence", "previous_envelope_hash", "event_hash", "key_id",
+    "signature", "algorithm",
+}
+_EXECUTION_KEYS = {
+    "event_schema_version", "timestamp_utc", "request_id", "evaluation_digest",
+    "action_name", "decision", "phase", "status", "grant_id", "effect_digest",
+    "policy_version", "grant_record_digest", "review_approval_digest", "exception_class",
+}
+_PHASE_STATUSES = {
+    "grant_consumed": frozenset({"admitted"}),
+    "dispatch_completed": frozenset({"executed", "failed"}),
+}
 SCOPE_SCHEMA_V3 = "agentshield-scope-v3"
 SCOPE_SCHEMA_V4 = "agentshield-scope-v4-agent-purpose"
 _SCOPE_KEYS_V3 = {
@@ -110,11 +127,19 @@ def _event_mapping(event: Any) -> dict[str, Any]:
 
 
 def _record_type(event: Mapping[str, Any]) -> str:
+    """Derive record semantics from exact, understood signed event schemas only.
+
+    A future ``agentshield-*`` schema is neither silently promoted to v1 execution
+    semantics nor silently demoted to an opaque record (which would hide it from the
+    execution/review linkage checks). It is ``unsupported`` and fails closed.
+    """
     schema = event.get("event_schema_version")
-    if schema == "agentshield-audit-event-v1":
+    if schema == POLICY_EVENT_SCHEMA:
         return "policy_decision"
-    if isinstance(schema, str) and schema.startswith("agentshield-execution-audit-event-"):
+    if schema == EXECUTION_EVENT_SCHEMA:
         return "execution_lifecycle"
+    if isinstance(schema, str) and schema.startswith("agentshield-"):
+        return "unsupported"
     return "audit_event"
 
 
@@ -206,6 +231,104 @@ def _parse_event_time(event: Mapping[str, Any]) -> datetime | None:
     return None if moment.tzinfo is None else moment.astimezone(timezone.utc)
 
 
+def _load_envelope(value: Mapping[str, Any]) -> AuditEnvelope:
+    """Parse an envelope with exact field set and exact JSON types, failing as ValueError."""
+    if set(value) != _ENVELOPE_KEYS:
+        raise ValueError("envelope fields do not match the audit-envelope schema")
+    text_fields = ("schema_version", "event_hash", "key_id", "signature", "algorithm")
+    if any(type(value[field]) is not str for field in text_fields):
+        raise ValueError("envelope text fields must be strings")
+    if type(value["sequence"]) is not int:
+        raise ValueError("envelope sequence must be an integer")
+    previous = value["previous_envelope_hash"]
+    if previous is not None and type(previous) is not str:
+        raise ValueError("previous_envelope_hash must be a string or null")
+    try:
+        return AuditEnvelope(**value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("envelope is malformed") from exc
+
+
+def _execution_event_valid(event: Mapping[str, Any]) -> bool:
+    if set(event) != _EXECUTION_KEYS:
+        return False
+    for field in (
+        "timestamp_utc", "request_id", "action_name", "decision", "phase", "status",
+        "grant_id", "policy_version",
+    ):
+        value = event.get(field)
+        if type(value) is not str or not value.strip():
+            return False
+    if not all(
+        _valid_hex_digest(event.get(field))
+        for field in ("evaluation_digest", "effect_digest", "grant_record_digest")
+    ):
+        return False
+    review = event.get("review_approval_digest")
+    if review is not None and not _valid_hex_digest(review):
+        return False
+    if event["decision"] not in {"allow", "review"}:
+        return False
+    if event["status"] not in _PHASE_STATUSES.get(event["phase"], frozenset()):
+        return False
+    exception_class = event.get("exception_class")
+    if event["status"] == "failed":
+        return exception_class is None or (type(exception_class) is str and bool(exception_class.strip()))
+    return exception_class is None
+
+
+def _verify_execution_linkage(bundle: EvidenceBundle) -> ChainVerificationResult | None:
+    """Prove every execution transition was authorized by a decision in the same receipt.
+
+    A valid audit signature only proves the writer emitted a record. Independently
+    verifiable authority additionally requires that each execution transition resolves
+    to exactly one earlier signed policy decision for the same request and evaluation,
+    with the same decision, policy version, action, grant and exact effect, and that the
+    effect is a member of that decision's independently reconstructed scope commitment.
+    """
+    decisions: dict[tuple[Any, str], list[tuple[int, Mapping[str, Any]]]] = {}
+    for index, record in enumerate(bundle.records):
+        if record.record_type == "policy_decision":
+            digest = _decision_digest(record.event)
+            request_id = record.event.get("request_id")
+            if digest is not None and type(request_id) is str:
+                decisions.setdefault((request_id, digest), []).append((index, record.event))
+
+    lifecycle: dict[tuple[str, str], set[str]] = {}
+    for index, record in enumerate(bundle.records):
+        if record.record_type != "execution_lifecycle":
+            continue
+        failure = ChainVerificationResult(AuditVerificationStatus.EVENT_MISMATCH, index, index)
+        event = record.event
+        if not _execution_event_valid(event):
+            return failure
+        key = (event["request_id"], event["evaluation_digest"])
+        matches = decisions.get(key, [])
+        if len(matches) != 1 or matches[0][0] >= index:
+            return failure
+        decision_event = matches[0][1]
+        metadata = decision_event.get("metadata")
+        if type(metadata) is not dict:
+            return failure
+        material = metadata.get("authorization_scope_material")
+        if (
+            decision_event.get("decision") != event["decision"]
+            or decision_event.get("policy_version") != event["policy_version"]
+            or metadata.get("action_name") != event["action_name"]
+            or metadata.get("authorization_grant_id") != event["grant_id"]
+            or metadata.get("effect_digest") != event["effect_digest"]
+            or type(material) is not dict
+            or event["effect_digest"] not in material.get("allowed_effects", ())
+        ):
+            return failure
+        phases = lifecycle.setdefault(key, set())
+        phase = event["phase"]
+        if phase in phases or (phase == "dispatch_completed" and "grant_consumed" not in phases):
+            return failure
+        phases.add(phase)
+    return None
+
+
 def build_bundle(
     envelopes: Sequence[AuditEnvelope],
     events: Sequence[Any],
@@ -224,7 +347,10 @@ def build_bundle(
         if envelope.algorithm != ED25519_ALGORITHM:
             raise ValueError("independent evidence bundles require Ed25519 audit envelopes")
         mapped = _event_mapping(event)
-        records.append(EvidenceRecord(_record_type(mapped), mapped, envelope))
+        record_type = _record_type(mapped)
+        if record_type == "unsupported":
+            raise ValueError("cannot export an unsupported AgentShield event schema in a v1 receipt")
+        records.append(EvidenceRecord(record_type, mapped, envelope))
     proofs: list[dict[str, Any]] = []
     for approval in review_approvals:
         if type(approval) is not ReviewApproval:
@@ -253,6 +379,12 @@ def load_bundle(value: str | bytes | Mapping[str, Any]) -> EvidenceBundle:
         raw = dict(value)
     else:
         raise TypeError("bundle must be JSON text, bytes or a mapping")
+    if type(raw) is not dict:
+        raise ValueError("bundle must be a JSON object")
+    # Exact wrapper shape: unsigned extra fields (for example "verified": true or an
+    # "audited_by" banner) must not ride along with evidence that verifies.
+    if set(raw) - {"review_approvals"} != _BUNDLE_KEYS:
+        raise ValueError("bundle fields do not match the v1 receipt profile")
     if raw.get("schema_version") != BUNDLE_SCHEMA_VERSION:
         raise ValueError("unsupported evidence bundle schema")
     if raw.get("receipt_profile") != RECEIPT_PROFILE:
@@ -265,8 +397,8 @@ def load_bundle(value: str | bytes | Mapping[str, Any]) -> EvidenceBundle:
         raise ValueError("bundle records must be a non-empty list")
     records: list[EvidenceRecord] = []
     for item in records_raw:
-        if type(item) is not dict:
-            raise ValueError("bundle record must be an object")
+        if type(item) is not dict or set(item) != _RECORD_KEYS:
+            raise ValueError("bundle record fields do not match the v1 receipt profile")
         record_type = item.get("record_type")
         event = item.get("event")
         envelope = item.get("envelope")
@@ -274,7 +406,7 @@ def load_bundle(value: str | bytes | Mapping[str, Any]) -> EvidenceBundle:
             raise ValueError("bundle record_type is missing")
         if type(event) is not dict or type(envelope) is not dict:
             raise ValueError("bundle record requires event and envelope objects")
-        records.append(EvidenceRecord(record_type, event, AuditEnvelope(**envelope)))
+        records.append(EvidenceRecord(record_type, event, _load_envelope(envelope)))
     approvals_raw = raw.get("review_approvals", [])
     if type(approvals_raw) is not list or any(type(item) is not dict for item in approvals_raw):
         raise ValueError("review_approvals must be a list of objects")
@@ -444,6 +576,12 @@ def verify_bundle(
 
     parsed = bundle if isinstance(bundle, EvidenceBundle) else load_bundle(bundle)
     for index, record in enumerate(parsed.records):
+        if _record_type(record.event) == "unsupported":
+            return ChainVerificationResult(
+                AuditVerificationStatus.SCHEMA_MISMATCH,
+                verified_count=index,
+                first_invalid_index=index,
+            )
         if record.record_type != _record_type(record.event):
             return ChainVerificationResult(
                 AuditVerificationStatus.EVENT_MISMATCH,
@@ -467,12 +605,21 @@ def verify_bundle(
     chain_result = verify_chain(Ed25519AuditVerifier(public_keys), envelopes, events)
     if not chain_result.valid:
         return chain_result
+    linkage_result = _verify_execution_linkage(parsed)
+    if linkage_result is not None:
+        return linkage_result
     review_result = _verify_review_proofs(parsed, review_public_keys)
     return chain_result if review_result is None else review_result
 
 
 def bundle_digest(bundle: EvidenceBundle | str | bytes | Mapping[str, Any]) -> str:
-    """Return a stable SHA-256 digest suitable for external anchoring."""
+    """Return a SHA-256 digest of one exported bundle document.
+
+    This identifies an export, not the evidence: it covers the unsigned
+    ``exported_at_utc`` field, so the same signed chain exported twice yields different
+    digests. Anchor the signed chain head (``envelope_hash`` of the last envelope, via
+    ``anchors.publish_head_anchor``) when a stable evidence commitment is required.
+    """
 
     parsed = bundle if isinstance(bundle, EvidenceBundle) else load_bundle(bundle)
     encoded = json.dumps(

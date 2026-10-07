@@ -33,6 +33,19 @@ SCOPE_KEYS_V3 = {
 SCOPE_KEYS_V4 = SCOPE_KEYS_V3 | {
     "agent_id", "purpose_id", "delegator_agent_id", "delegator_grant_id",
 }
+POLICY_EVENT_SCHEMA = "agentshield-audit-event-v1"
+EXECUTION_EVENT_SCHEMA = "agentshield-execution-audit-event-v2"
+BUNDLE_KEYS = {"schema_version", "receipt_profile", "exported_at_utc", "records"}
+RECORD_KEYS = {"record_type", "event", "envelope"}
+EXECUTION_KEYS = {
+    "event_schema_version", "timestamp_utc", "request_id", "evaluation_digest",
+    "action_name", "decision", "phase", "status", "grant_id", "effect_digest",
+    "policy_version", "grant_record_digest", "review_approval_digest", "exception_class",
+}
+PHASE_STATUSES = {
+    "grant_consumed": {"admitted"},
+    "dispatch_completed": {"executed", "failed"},
+}
 REVIEW_KEYS = {
     "review_schema", "evaluation_digest", "approval_id", "request_id",
     "action_digest", "payload_digest", "scope_digest", "tool_manifest_digest",
@@ -68,11 +81,15 @@ def signature_material(envelope):
 
 
 def record_type_for_event(event):
+    # Exact understood schemas only. Unknown agentshield-* schemas are unsupported:
+    # never promoted to v1 execution semantics, never hidden as opaque records.
     schema = event.get("event_schema_version")
-    if schema == "agentshield-audit-event-v1":
+    if schema == POLICY_EVENT_SCHEMA:
         return "policy_decision"
-    if isinstance(schema, str) and schema.startswith("agentshield-execution-audit-event-"):
+    if schema == EXECUTION_EVENT_SCHEMA:
         return "execution_lifecycle"
+    if isinstance(schema, str) and schema.startswith("agentshield-"):
+        return "unsupported"
     return "audit_event"
 
 
@@ -218,13 +235,16 @@ def verify_review_signature(proof, keys):
     expires = parse_time(proof.get("expires_at_utc"))
     if issued is None or expires is None or expires <= issued:
         return False, "review approval time window is invalid"
+    # Canonical signed form only: UTC isoformat timestamps and lowercase 128-hex
+    # signature, exactly as the review service emits them.
+    if proof["issued_at_utc"] != issued.isoformat() or proof["expires_at_utc"] != expires.isoformat():
+        return False, "review approval timestamps are not in canonical signed form"
+    if not valid_ed25519_signature_hex(proof["signature"]):
+        return False, "review approval signature is not canonical lowercase Ed25519 hex"
     key = keys.get(proof["key_id"])
     if key is None:
         return False, f"unknown review public key id: {proof['key_id']}"
-    try:
-        signature = bytes.fromhex(proof["signature"])
-    except ValueError:
-        return False, "review approval signature is not valid hex"
+    signature = bytes.fromhex(proof["signature"])
     material = dict(proof)
     material.pop("signature")
     try:
@@ -333,9 +353,82 @@ def verify_review_proofs(bundle, records, review_keys):
     return None, None
 
 
+def execution_event_valid(event):
+    if set(event) != EXECUTION_KEYS:
+        return False
+    for field in (
+        "timestamp_utc", "request_id", "action_name", "decision", "phase", "status",
+        "grant_id", "policy_version",
+    ):
+        value = event.get(field)
+        if type(value) is not str or not value.strip():
+            return False
+    for field in ("evaluation_digest", "effect_digest", "grant_record_digest"):
+        if not valid_hex_digest(event.get(field)):
+            return False
+    review = event.get("review_approval_digest")
+    if review is not None and not valid_hex_digest(review):
+        return False
+    if event["decision"] not in {"allow", "review"}:
+        return False
+    if event["status"] not in PHASE_STATUSES.get(event["phase"], set()):
+        return False
+    exception_class = event.get("exception_class")
+    if event["status"] == "failed":
+        return exception_class is None or (type(exception_class) is str and bool(exception_class.strip()))
+    return exception_class is None
+
+
+def verify_execution_linkage(records):
+    """Every execution transition must resolve to one earlier signed authorizing decision."""
+    decisions = {}
+    for index, record in enumerate(records):
+        if record["record_type"] != "policy_decision":
+            continue
+        digest = evaluation_digest(record["event"])
+        request_id = record["event"].get("request_id")
+        if digest and type(request_id) is str:
+            decisions.setdefault((request_id, digest), []).append((index, record["event"]))
+
+    lifecycle = {}
+    for index, record in enumerate(records):
+        if record["record_type"] != "execution_lifecycle":
+            continue
+        event = record["event"]
+        if not execution_event_valid(event):
+            return "execution evidence does not match the v2 execution-event schema", index
+        key = (event["request_id"], event["evaluation_digest"])
+        matches = decisions.get(key, [])
+        if len(matches) != 1 or matches[0][0] >= index:
+            return "execution evidence does not resolve to exactly one earlier signed decision", index
+        decision_event = matches[0][1]
+        metadata = decision_event.get("metadata")
+        if type(metadata) is not dict:
+            return "authorizing decision lacks binding metadata", index
+        material = metadata.get("authorization_scope_material")
+        if (
+            decision_event.get("decision") != event["decision"]
+            or decision_event.get("policy_version") != event["policy_version"]
+            or metadata.get("action_name") != event["action_name"]
+            or metadata.get("authorization_grant_id") != event["grant_id"]
+            or metadata.get("effect_digest") != event["effect_digest"]
+        ):
+            return "execution evidence does not match its authorizing decision", index
+        if type(material) is not dict or event["effect_digest"] not in material.get("allowed_effects", []):
+            return "executed effect is not committed by the authorizing scope", index
+        phases = lifecycle.setdefault(key, set())
+        phase = event["phase"]
+        if phase in phases or (phase == "dispatch_completed" and "grant_consumed" not in phases):
+            return "execution lifecycle transitions are duplicated or out of order", index
+        phases.add(phase)
+    return None, None
+
+
 def verify(bundle, keys, review_keys=None):
     if type(bundle) is not dict:
         return False, "bundle is not a JSON object", 0, None
+    if set(bundle) - {"review_approvals"} != BUNDLE_KEYS:
+        return False, "bundle fields do not match the v1 receipt profile", 0, None
     if bundle.get("schema_version") != BUNDLE_SCHEMA:
         return False, "unsupported bundle schema", 0, None
     if bundle.get("receipt_profile") != RECEIPT_PROFILE:
@@ -348,6 +441,8 @@ def verify(bundle, keys, review_keys=None):
     for index, record in enumerate(records):
         if type(record) is not dict:
             return False, "record is not an object", index, None
+        if set(record) != RECORD_KEYS:
+            return False, "record fields do not match the v1 receipt profile", index, None
         record_type = record.get("record_type")
         event = record.get("event")
         envelope = record.get("envelope")
@@ -355,6 +450,8 @@ def verify(bundle, keys, review_keys=None):
             return False, "record_type is missing", index, None
         if type(event) is not dict or type(envelope) is not dict:
             return False, "record lacks event/envelope objects", index, None
+        if record_type_for_event(event) == "unsupported":
+            return False, "unsupported AgentShield event schema for the v1 receipt profile", index, None
         if record_type != record_type_for_event(event):
             return False, "record_type does not match signed event schema", index, None
         required = {
@@ -363,6 +460,13 @@ def verify(bundle, keys, review_keys=None):
         }
         if set(envelope) != required:
             return False, "envelope fields do not match schema", index, None
+        if (
+            any(type(envelope[f]) is not str for f in ("schema_version", "event_hash", "key_id", "signature", "algorithm"))
+            or type(envelope["sequence"]) is not int
+            or (envelope["previous_envelope_hash"] is not None
+                and type(envelope["previous_envelope_hash"]) is not str)
+        ):
+            return False, "envelope field types do not match schema", index, None
         if envelope["schema_version"] != ENVELOPE_SCHEMA:
             return False, "unsupported envelope schema", index, None
         if envelope["algorithm"] != ALGORITHM:
@@ -393,6 +497,9 @@ def verify(bundle, keys, review_keys=None):
                 return False, semantic_error, index, None
         previous = envelope
 
+    linkage_error, linkage_index = verify_execution_linkage(records)
+    if linkage_error:
+        return False, linkage_error, linkage_index, None
     review_error, review_index = verify_review_proofs(bundle, records, review_keys or {})
     if review_error:
         return False, review_error, review_index, None
@@ -419,7 +526,8 @@ def main(argv=None):
         review_keys = parse_keys(args.review_pubkey, option="--review-pubkey", required=False)
         bundle = json.loads(Path(args.bundle).read_text(encoding="utf-8"))
         valid, reason, verified, head = verify(bundle, keys, review_keys)
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError, KeyError) as exc:
+        # Hostile input must yield a structured "invalid" verdict, never a traceback.
         print(json.dumps({"valid": False, "error": str(exc)}), file=sys.stderr)
         return 2
 

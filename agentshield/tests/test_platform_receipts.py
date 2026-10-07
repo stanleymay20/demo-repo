@@ -6,32 +6,66 @@ from agentshield.platform.audit import (
     AuditVerificationStatus,
     Ed25519AuditSigner,
 )
+from agentshield.platform.actions import ActionDescriptor
+from agentshield.platform.authorization import AuthorizationScope
+from agentshield.platform.detectors import DetectionResult
+from agentshield.platform.effects import effect_digest
+from agentshield.platform.execution import ExecutionStatus, enforce_and_execute
+from agentshield.platform.grants import GrantAuthority
+from agentshield.platform.pipeline import evaluate_request
+from agentshield.platform.policy import ContentRisk
+from agentshield.platform.provenance import InputProvenance, TrustLevel
 from agentshield.platform.receipts import (
     build_bundle,
     bundle_digest,
     load_bundle,
     verify_bundle,
 )
+from agentshield.platform.tools import ToolManifest, ToolRegistry
+
+
+class _LowDetector:
+    def detect(self, _content):
+        return DetectionResult(ContentRisk.LOW, 0.01, "receipt-test", "1")
+
+
+class _Recorder:
+    def execute(self, *, action_name, payload):
+        return {"ok": True}
 
 
 class ReceiptBundleTests(unittest.TestCase):
     def setUp(self):
+        # A genuine governed flow: signed ALLOW decision, then the gateway's signed
+        # grant-consumption and dispatch-completion transitions. A receipt containing an
+        # execution transition without its authorizing decision is not a valid receipt.
         self.signer = Ed25519AuditSigner({"audit": b"r" * 32}, active_key_id="audit")
         self.public_keys = self.signer.public_keys()
         self.trail = AuditTrail(self.signer)
-        self.trail.append({
-            "event_schema_version": "agentshield-audit-event-v1",
-            "request_id": "r1",
-            "decision": "block",
-            "policy_version": "agentshield-policy-v7",
-        })
-        self.trail.append({
-            "event_schema_version": "agentshield-execution-audit-event-v2",
-            "request_id": "r2",
-            "decision": "allow",
-            "phase": "dispatch_completed",
-            "status": "executed",
-        })
+        action = ActionDescriptor("docs.read", ("read_data",))
+        payload = {"doc": "q3-report"}
+        manifest = ToolManifest(action.name, action.capabilities, "1")
+        scope = AuthorizationScope(
+            "receipt-grant", action.capabilities, issuer="policy-service",
+            principal="employee-42", tenant="company-7",
+            allowed_effects=(effect_digest(action=action, payload=payload, manifest=manifest),),
+        )
+        authority = GrantAuthority()
+        authority.issue(scope)
+        registry = ToolRegistry((manifest,))
+        pipeline = evaluate_request(
+            request_id="r2", source_type="user_input", content="read the report",
+            action=action, payload=payload, detector=_LowDetector(),
+            provenance=InputProvenance("user_input", trust_level=TrustLevel.TRUSTED),
+            authorization_scope=scope, tool_registry=registry, grant_authority=authority,
+            audit_trail=self.trail,
+        )
+        executed = enforce_and_execute(
+            pipeline_result=pipeline, action=action, payload=payload, executor=_Recorder(),
+            authorization_scope=scope, tool_registry=registry, grant_authority=authority,
+            audit_trail=self.trail,
+        )
+        assert executed.status is ExecutionStatus.EXECUTED
 
     def test_bundle_round_trip_verifies_with_public_key_only(self):
         bundle = build_bundle(self.trail.envelopes, self.trail.events)
@@ -39,9 +73,9 @@ class ReceiptBundleTests(unittest.TestCase):
         parsed = load_bundle(text)
         result = verify_bundle(parsed, self.public_keys)
         self.assertTrue(result.valid)
-        self.assertEqual(result.verified_count, 2)
+        self.assertEqual(result.verified_count, 3)
         self.assertEqual([r.record_type for r in parsed.records], [
-            "policy_decision", "execution_lifecycle",
+            "policy_decision", "execution_lifecycle", "execution_lifecycle",
         ])
 
     def test_bundle_tamper_reports_first_broken_record(self):

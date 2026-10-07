@@ -160,7 +160,12 @@ def delegated_record(
     parent_scope: AuthorizationScope, child_scope: AuthorizationScope,
     chain: tuple[GrantRecord, ...], *, now: datetime, ttl: timedelta,
 ) -> GrantRecord:
-    """Validate attenuation and construct a child; caller must transfer atomically."""
+    """Validate attenuation and construct a child; caller must transfer atomically.
+
+    Legacy v3 authority stays legacy during delegation. A machine-bound v4 parent may
+    delegate to another agent, but the child must preserve principal, tenant and purpose,
+    and must commit the parent's ``agent_id`` as its immediate ``delegator_agent_id``.
+    """
     if verify_grant_chain(parent_scope, chain, now) is not GrantStatus.VALID:
         raise ValueError("parent grant is not valid for delegation")
     parent = chain[0]
@@ -177,6 +182,17 @@ def delegated_record(
         raise ValueError(
             "child needs a fresh id and must preserve originating issuer, principal and tenant"
         )
+    if parent_scope.machine_identity_bound:
+        if (
+            not child_scope.machine_identity_bound
+            or child_scope.purpose_id != parent_scope.purpose_id
+            or child_scope.delegator_agent_id != parent_scope.agent_id
+        ):
+            raise ValueError(
+                "machine-bound child must preserve purpose and name the parent agent as delegator"
+            )
+    elif child_scope.machine_identity_bound:
+        raise ValueError("legacy authority cannot acquire machine identity during delegation")
     if (not child_scope.allowed_capabilities
             or not set(child_scope.allowed_capabilities).issubset(parent_scope.allowed_capabilities)
             or not child_scope.allowed_effects

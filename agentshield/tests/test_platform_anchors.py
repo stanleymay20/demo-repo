@@ -1,7 +1,12 @@
 import unittest
 from datetime import datetime, timezone
 
-from agentshield.platform.anchors import build_head_anchor_statement, publish_head_anchor
+from agentshield.platform.anchors import (
+    AnchorPublication,
+    anchor_statement_digest,
+    build_head_anchor_statement,
+    publish_head_anchor,
+)
 from agentshield.platform.audit import AuditSigner, AuditTrail, Ed25519AuditSigner, envelope_hash
 
 
@@ -11,12 +16,23 @@ class RecordingPublisher:
 
     def publish(self, statement):
         self.statements.append(statement)
-        return "transparency://entry/123"
+        return AnchorPublication(
+            external_reference="transparency://entry/123",
+            committed_statement_digest=anchor_statement_digest(statement),
+        )
 
 
-class EmptyReferencePublisher:
+class WrongCommitmentPublisher:
     def publish(self, _statement):
-        return ""
+        return AnchorPublication(
+            external_reference="transparency://entry/wrong",
+            committed_statement_digest="0" * 64,
+        )
+
+
+class LegacyStringPublisher:
+    def publish(self, _statement):
+        return "transparency://entry/legacy"
 
 
 class HeadAnchorTests(unittest.TestCase):
@@ -34,8 +50,22 @@ class HeadAnchorTests(unittest.TestCase):
         self.assertEqual(statement.head_envelope_hash, envelope_hash(trail.head))
         self.assertEqual(statement.audit_key_id, "audit")
         self.assertEqual(statement.observed_at_utc, observed.isoformat())
+        self.assertEqual(len(anchor_statement_digest(statement)), 64)
 
-    def test_publication_returns_external_reference(self):
+    def test_stream_identity_is_part_of_external_commitment(self):
+        signer = Ed25519AuditSigner({"audit": b"h" * 32}, active_key_id="audit")
+        trail = AuditTrail(signer)
+        trail.append({"request_id": "r1"})
+        observed = datetime(2026, 10, 7, 16, 0, tzinfo=timezone.utc)
+        first = build_head_anchor_statement(
+            stream_id="tenant-a:agent-1", head=trail.head, observed_at_utc=observed,
+        )
+        second = build_head_anchor_statement(
+            stream_id="tenant-b:agent-1", head=trail.head, observed_at_utc=observed,
+        )
+        self.assertNotEqual(anchor_statement_digest(first), anchor_statement_digest(second))
+
+    def test_publication_returns_reference_and_exact_statement_commitment(self):
         signer = Ed25519AuditSigner({"audit": b"h" * 32}, active_key_id="audit")
         trail = AuditTrail(signer)
         trail.append({"request_id": "r1", "decision": "block"})
@@ -44,6 +74,7 @@ class HeadAnchorTests(unittest.TestCase):
             stream_id="tenant-a:agent-1", head=trail.head, publisher=publisher,
         )
         self.assertEqual(receipt.external_reference, "transparency://entry/123")
+        self.assertEqual(receipt.statement_digest, anchor_statement_digest(receipt.statement))
         self.assertEqual(len(publisher.statements), 1)
 
     def test_hmac_chain_cannot_be_presented_as_independent_external_anchor(self):
@@ -52,13 +83,22 @@ class HeadAnchorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_head_anchor_statement(stream_id="stream", head=trail.head)
 
-    def test_missing_durable_external_reference_fails(self):
+    def test_provider_commitment_mismatch_fails_closed(self):
         signer = Ed25519AuditSigner({"audit": b"h" * 32}, active_key_id="audit")
         trail = AuditTrail(signer)
         trail.append({"request_id": "r1"})
-        with self.assertRaises(RuntimeError):
+        with self.assertRaisesRegex(RuntimeError, "different statement digest"):
             publish_head_anchor(
-                stream_id="stream", head=trail.head, publisher=EmptyReferencePublisher(),
+                stream_id="stream", head=trail.head, publisher=WrongCommitmentPublisher(),
+            )
+
+    def test_legacy_reference_only_publisher_is_rejected(self):
+        signer = Ed25519AuditSigner({"audit": b"h" * 32}, active_key_id="audit")
+        trail = AuditTrail(signer)
+        trail.append({"request_id": "r1"})
+        with self.assertRaisesRegex(RuntimeError, "AnchorPublication"):
+            publish_head_anchor(
+                stream_id="stream", head=trail.head, publisher=LegacyStringPublisher(),
             )
 
 

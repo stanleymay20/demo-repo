@@ -46,6 +46,8 @@ class PortableReviewReceiptTests(unittest.TestCase):
             issuer="policy-service",
             principal="employee-42",
             tenant="company-7",
+            agent_id="customer-comms-agent",
+            purpose_id="support-case-8842",
             allowed_effects=(effect_digest(action=action, payload=payload, manifest=manifest),),
         )
         authority = GrantAuthority()
@@ -68,6 +70,18 @@ class PortableReviewReceiptTests(unittest.TestCase):
             audit_trail=trail,
         )
         self.assertIs(pipeline.policy.decision, Decision.REVIEW)
+        self.assertEqual(
+            pipeline.audit_event.metadata["authorization_scope_material"]["scope_schema"],
+            "agentshield-scope-v4-agent-purpose",
+        )
+        self.assertEqual(
+            pipeline.audit_event.metadata["authorization_agent_id"],
+            "customer-comms-agent",
+        )
+        self.assertEqual(
+            pipeline.audit_event.metadata["authorization_purpose_id"],
+            "support-case-8842",
+        )
 
         review_signer = ReviewSigner({"review-k1": b"r" * 32}, active_key_id="review-k1")
         review_verifier = ReviewVerifier(review_signer.public_keys())
@@ -115,6 +129,9 @@ class PortableReviewReceiptTests(unittest.TestCase):
         self.assertTrue(result.valid)
         self.assertEqual(result.verified_count, 3)
         self.assertEqual(len(bundle.review_approvals), 1)
+        material = bundle.records[0].event["metadata"]["authorization_scope_material"]
+        self.assertEqual(material["agent_id"], "customer-comms-agent")
+        self.assertEqual(material["purpose_id"], "support-case-8842")
 
     def test_review_execution_fails_portable_verification_without_review_proof(self):
         bundle, audit_signer, review_signer = self.fixture()
@@ -143,7 +160,7 @@ class PortableReviewReceiptTests(unittest.TestCase):
         )
         self.assertIs(result.status, AuditVerificationStatus.INVALID_SIGNATURE)
 
-    def test_standalone_verifier_checks_both_trust_anchors(self):
+    def test_standalone_verifier_checks_both_trust_anchors_and_v4_scope(self):
         bundle, audit_signer, review_signer = self.fixture()
         with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
             json.dump(bundle.to_dict(), handle)

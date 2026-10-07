@@ -13,7 +13,7 @@ from agentshield.platform.integrity import action_digest, payload_digest, scope_
 from agentshield.platform.pipeline import evaluate_request
 from agentshield.platform.policy import ContentRisk, Decision
 from agentshield.platform.provenance import InputProvenance, TrustLevel
-from agentshield.platform.review import ReviewAuthority
+from agentshield.platform.review import ReviewSigner, ReviewVerifier
 from agentshield.platform.tools import ToolManifest, ToolRegistry
 
 
@@ -66,13 +66,14 @@ class ReviewExecutionTests(unittest.TestCase):
             tool_registry=self.registry,
             grant_authority=self.authority,
         )
-        self.review_authority = ReviewAuthority(
+        self.review_signer = ReviewSigner(
             {"review-key": b"r" * 32},
             active_key_id="review-key",
         )
+        self.review_verifier = ReviewVerifier(self.review_signer.public_keys())
 
     def approval(self):
-        return self.review_authority.issue(
+        return self.review_signer.issue(
             request_id=self.pipeline.audit_event.request_id,
             action_digest=action_digest(self.action),
             payload_digest=payload_digest(self.payload),
@@ -89,7 +90,7 @@ class ReviewExecutionTests(unittest.TestCase):
             pipeline_result=pipeline, action=self.action, payload=self.payload,
             executor=executor, authorization_scope=self.scope, tool_registry=self.registry,
             grant_authority=self.authority, review_approval=approval,
-            review_authority=self.review_authority,
+            review_verifier=self.review_verifier,
         )
         return result, executor
 
@@ -145,7 +146,6 @@ class ReviewExecutionTests(unittest.TestCase):
             pipeline = replace(self.pipeline, audit_event=replace(self.pipeline.audit_event, metadata=metadata))
             result, executor = self.execute_review(pipeline, approval)
             self.assertIs(result.status, ExecutionStatus.BLOCKED)
-            self.assertIn("bindings", result.reason)
             self.assertEqual(executor.calls, [])
         self.assertEqual(self.authority.verify(self.scope)[0].value, "valid")
 
@@ -184,59 +184,18 @@ class ReviewExecutionTests(unittest.TestCase):
             tool_registry=self.registry,
             grant_authority=self.authority,
             review_approval=approval,
-            review_authority=self.review_authority,
+            review_verifier=self.review_verifier,
         )
         self.assertIs(result.status, ExecutionStatus.EXECUTED)
         self.assertEqual(result.review_approval_id, approval.approval_id)
         self.assertEqual(len(executor.calls), 1)
         self.assertEqual(self.authority.verify(self.scope)[0].value, "consumed")
 
-    def test_review_approval_rejects_multi_use_grant(self):
-        scope = AuthorizationScope(
-            "review-grant-multi",
-            ("send_message",),
-            issuer="test-user",
-            allowed_effects=self.scope.allowed_effects,
-        )
-        authority = GrantAuthority()
-        authority.issue(scope, ttl=timedelta(minutes=5), single_use=False)
-        pipeline = evaluate_request(
-            request_id="review-req-multi",
-            source_type="user_input",
-            content="send the approved status",
-            action=self.action,
-            detector=FixedDetector(),
-            payload=self.payload,
-            provenance=InputProvenance("user_input", trust_level=TrustLevel.TRUSTED),
-            authorization_scope=scope,
-            tool_registry=self.registry,
-            grant_authority=authority,
-        )
-        approval = self.review_authority.issue(
-            request_id=pipeline.audit_event.request_id,
-            action_digest=action_digest(self.action),
-            payload_digest=payload_digest(self.payload),
-            scope_digest=scope_digest(scope),
-            tool_manifest_digest=tool_manifest_digest(self.manifest),
-            policy_version=pipeline.policy.policy_version,
-            evaluation_digest=evaluation_digest(pipeline.audit_event),
-            reviewer="human-reviewer",
-        )
-        executor = Recorder()
-        result = enforce_and_execute(
-            pipeline_result=pipeline,
-            action=self.action,
-            payload=self.payload,
-            executor=executor,
-            authorization_scope=scope,
-            tool_registry=self.registry,
-            grant_authority=authority,
-            review_approval=approval,
-            review_authority=self.review_authority,
-        )
-        self.assertIs(result.status, ExecutionStatus.BLOCKED)
-        self.assertIn("single-use", result.reason)
-        self.assertEqual(executor.calls, [])
+    def test_review_grants_are_single_use(self):
+        record = self.authority.get(self.scope.grant_id)
+        self.assertTrue(record.single_use)
+        with self.assertRaises(TypeError):
+            self.authority.issue(replace(self.scope, grant_id="multi"), single_use=False)
 
     def test_approval_cannot_authorize_mutated_payload(self):
         executor = Recorder()
@@ -250,7 +209,7 @@ class ReviewExecutionTests(unittest.TestCase):
             tool_registry=self.registry,
             grant_authority=self.authority,
             review_approval=approval,
-            review_authority=self.review_authority,
+            review_verifier=self.review_verifier,
         )
         self.assertIs(result.status, ExecutionStatus.BLOCKED)
         self.assertIn("payload changed", result.reason)
@@ -261,16 +220,16 @@ class ReviewExecutionTests(unittest.TestCase):
         approval = self.approval()
         consume = self.authority.consume
 
-        def mutate_recipient(scope, **kwargs):
+        def mutate_recipient(scope):
             self.payload["to"] = "attacker@example"
-            return consume(scope, **kwargs)
+            return consume(scope)
 
         self.authority.consume = mutate_recipient
         result = enforce_and_execute(
             pipeline_result=self.pipeline, action=self.action, payload=self.payload,
             executor=executor, authorization_scope=self.scope, tool_registry=self.registry,
             grant_authority=self.authority, review_approval=approval,
-            review_authority=self.review_authority,
+            review_verifier=self.review_verifier,
         )
         self.assertIs(result.status, ExecutionStatus.EXECUTED)
         self.assertEqual(executor.calls, [("mail.send", {"to": "approved@example", "body": "status"})])

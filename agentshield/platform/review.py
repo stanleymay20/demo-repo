@@ -1,8 +1,11 @@
 """Cryptographically bound human-review approvals for AgentShield.
 
-A REVIEW decision is not executable by itself. A trusted review service can issue a
-short-lived HMAC approval that is bound to the exact request, action, payload, scope,
-tool manifest, policy version and complete evaluation that were reviewed.
+A REVIEW decision is not executable by itself. A trusted review service signs a
+short-lived Ed25519 approval bound to the exact request, action, payload, scope, tool
+manifest, policy version and complete evaluation. Execution gateways hold public keys
+only, so the ability to verify an approval does not confer the ability to forge one.
+
+Ed25519 support is optional at install time: use ``agentshield-runtime[signing]``.
 """
 
 from __future__ import annotations
@@ -11,10 +14,9 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 import hashlib
-import hmac
 import json
 import secrets
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 class ReviewStatus(str, Enum):
@@ -67,7 +69,7 @@ class ReviewApproval:
 
 def _material(approval: ReviewApproval) -> dict[str, Any]:
     return {
-        "review_schema": "agentshield-review-v2",
+        "review_schema": "agentshield-review-v3-ed25519",
         "evaluation_digest": approval.evaluation_digest,
         "approval_id": approval.approval_id,
         "request_id": approval.request_id,
@@ -99,32 +101,49 @@ def review_approval_digest(approval: ReviewApproval) -> str:
     return hashlib.sha256(_canonical_bytes(material)).hexdigest()
 
 
-class ReviewAuthority:
-    """Issue and verify short-lived approvals with explicit signing-key rotation."""
+def _cryptography():
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey,
+            Ed25519PublicKey,
+        )
+    except ImportError as exc:  # pragma: no cover - dependency-free install path
+        raise RuntimeError(
+            "Ed25519 review approvals require agentshield-runtime[signing]"
+        ) from exc
+    return InvalidSignature, serialization, Ed25519PrivateKey, Ed25519PublicKey
 
-    def __init__(self, keys: Mapping[str, bytes], *, active_key_id: str) -> None:
-        clean = dict(keys)
-        if active_key_id not in clean:
-            raise ValueError("active_key_id is not present in keys")
-        if not clean:
-            raise ValueError("at least one review key is required")
-        for key_id, key in clean.items():
-            if not key_id.strip():
-                raise ValueError("review key ids must be non-empty")
-            if len(key) < 32:
-                raise ValueError("review keys must contain at least 32 bytes")
-        self._keys = clean
+
+def _normalize_clock(clock: Callable[[], datetime]) -> datetime:
+    now = clock()
+    if now.tzinfo is None:
+        raise ValueError("review authority clock must return a timezone-aware datetime")
+    return now.astimezone(timezone.utc)
+
+
+class ReviewSigner:
+    """Review-service-only holder of Ed25519 private signing keys."""
+
+    def __init__(
+        self,
+        private_keys: Mapping[str, bytes],
+        *,
+        active_key_id: str,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        _, _, PrivateKey, _ = _cryptography()
+        clean = dict(private_keys)
+        if not clean or active_key_id not in clean:
+            raise ValueError("active_key_id must reference a configured review private key")
+        self._keys = {}
+        for key_id, raw in clean.items():
+            if not key_id.strip() or len(raw) != 32:
+                raise ValueError("Ed25519 private keys must be 32 raw bytes with a non-empty id")
+            self._keys[key_id] = PrivateKey.from_private_bytes(raw)
         self._active_key_id = active_key_id
-
-    @staticmethod
-    def _now(value: datetime | None) -> datetime:
-        now = datetime.now(timezone.utc) if value is None else value
-        if now.tzinfo is None:
-            raise ValueError("now must be timezone-aware")
-        return now.astimezone(timezone.utc)
-
-    def _signature(self, approval: ReviewApproval, key: bytes) -> str:
-        return hmac.new(key, _canonical_bytes(_material(approval)), hashlib.sha256).hexdigest()
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def issue(
         self,
@@ -138,11 +157,10 @@ class ReviewAuthority:
         evaluation_digest: str,
         reviewer: str,
         ttl: timedelta = timedelta(minutes=5),
-        now: datetime | None = None,
     ) -> ReviewApproval:
         if ttl <= timedelta(0):
             raise ValueError("review approval ttl must be positive")
-        issued_at = self._now(now)
+        issued_at = _normalize_clock(self._clock)
         approval = ReviewApproval(
             approval_id="review_" + secrets.token_urlsafe(18),
             request_id=request_id,
@@ -157,10 +175,39 @@ class ReviewAuthority:
             expires_at_utc=issued_at + ttl,
             key_id=self._active_key_id,
         )
-        return replace(
-            approval,
-            signature=self._signature(approval, self._keys[self._active_key_id]),
-        )
+        signature = self._keys[self._active_key_id].sign(_canonical_bytes(_material(approval))).hex()
+        return replace(approval, signature=signature)
+
+    def public_keys(self) -> dict[str, bytes]:
+        _, serialization, _, _ = _cryptography()
+        return {
+            key_id: key.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+            for key_id, key in self._keys.items()
+        }
+
+
+class ReviewVerifier:
+    """Execution-side approval verifier containing public keys only."""
+
+    def __init__(
+        self,
+        public_keys: Mapping[str, bytes],
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        _, _, _, PublicKey = _cryptography()
+        clean = dict(public_keys)
+        if not clean:
+            raise ValueError("at least one review public key is required")
+        self._keys = {}
+        for key_id, raw in clean.items():
+            if not key_id.strip() or len(raw) != 32:
+                raise ValueError("Ed25519 public keys must be 32 raw bytes with a non-empty id")
+            self._keys[key_id] = PublicKey.from_public_bytes(raw)
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def verify(
         self,
@@ -173,15 +220,20 @@ class ReviewAuthority:
         tool_manifest_digest: str,
         policy_version: str,
         evaluation_digest: str,
-        now: datetime | None = None,
     ) -> ReviewStatus:
         key = self._keys.get(approval.key_id)
         if key is None:
             return ReviewStatus.UNKNOWN_KEY
-        expected_signature = self._signature(replace(approval, signature=""), key)
-        if not hmac.compare_digest(expected_signature, approval.signature):
+        try:
+            signature = bytes.fromhex(approval.signature)
+        except ValueError:
             return ReviewStatus.INVALID_SIGNATURE
-        current = self._now(now)
+        InvalidSignature, _, _, _ = _cryptography()
+        try:
+            key.verify(signature, _canonical_bytes(_material(replace(approval, signature=""))))
+        except InvalidSignature:
+            return ReviewStatus.INVALID_SIGNATURE
+        current = _normalize_clock(self._clock)
         if current < approval.issued_at_utc:
             return ReviewStatus.NOT_YET_VALID
         if current >= approval.expires_at_utc:

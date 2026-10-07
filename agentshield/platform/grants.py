@@ -2,11 +2,12 @@
 
 AuthorizationScope describes *what* a task may do. GrantAuthority is the server-owned
 state that decides whether that scope is genuine, current, revoked, expired or already
-consumed. Single-use grants are the secure default.
+consumed. Every executable GA grant is single-use.
 
 The in-memory implementation is appropriate for deterministic tests and a single-process
 prototype. Production deployments must replace it with an atomic durable store so
-verify/consume is race-safe across workers.
+verify/consume is race-safe across workers. Time is owned by the authority: callers cannot
+supply a historical timestamp to verification or consumption.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ class GrantStatus(str, Enum):
     DELEGATED = "delegated"
     ANCESTOR_INVALID = "ancestor_invalid"
     NOT_YET_VALID = "not_yet_valid"
+    REUSABLE_UNSUPPORTED = "reusable_unsupported"
 
 
 @dataclass(frozen=True)
@@ -93,15 +95,11 @@ class GrantAuthorityProtocol(Protocol):
     def verify(
         self,
         scope: AuthorizationScope,
-        *,
-        now: datetime | None = None,
     ) -> tuple[GrantStatus, GrantRecord | None]: ...
 
     def consume(
         self,
         scope: AuthorizationScope,
-        *,
-        now: datetime | None = None,
     ) -> tuple[GrantStatus, GrantRecord | None]: ...
 
 
@@ -134,9 +132,11 @@ def verify_grant_chain(
     if chain[-1].parent_grant_id is not None:
         return GrantStatus.ANCESTOR_INVALID
     for index, record in enumerate(chain):
-        if record.revoked:
+        if not record.single_use:
+            status = GrantStatus.REUSABLE_UNSUPPORTED
+        elif record.revoked:
             status = GrantStatus.REVOKED
-        elif record.single_use and record.consumed_at_utc is not None:
+        elif record.consumed_at_utc is not None:
             status = GrantStatus.CONSUMED
         elif now < record.issued_at_utc:
             status = GrantStatus.NOT_YET_VALID
@@ -149,7 +149,7 @@ def verify_grant_chain(
         if index:
             child = chain[index - 1]
             if (child.parent_grant_id != record.grant_id
-                    or record.delegated_to != child.grant_id or not record.single_use
+                    or record.delegated_to != child.grant_id
                     or child.issuer != record.issuer
                     or child.expires_at_utc > record.expires_at_utc):
                 return GrantStatus.ANCESTOR_INVALID
@@ -187,33 +187,36 @@ def delegated_record(
 
 
 class GrantAuthority:
-    """Thread-safe single-process authority; use PostgreSQL across workers."""
+    """Thread-safe single-process authority; use PostgreSQL across workers.
 
-    def __init__(self) -> None:
+    Tests that need deterministic time may inject an authority-owned clock at
+    construction. Individual security decisions never accept caller-supplied time.
+    """
+
+    def __init__(self, *, clock: Callable[[], datetime] | None = None) -> None:
         self._records: dict[str, GrantRecord] = {}
         self._lock = RLock()
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
-    @staticmethod
-    def _now(value: datetime | None) -> datetime:
-        now = datetime.now(timezone.utc) if value is None else value
+    def _now(self) -> datetime:
+        now = self._clock()
         if now.tzinfo is None:
-            raise ValueError("now must be timezone-aware")
+            raise ValueError("authority clock must return a timezone-aware datetime")
         return now.astimezone(timezone.utc)
 
     def issue(
         self, scope: AuthorizationScope, *, ttl: timedelta = timedelta(minutes=5),
-        single_use: bool = True, now: datetime | None = None,
     ) -> GrantRecord:
         if ttl <= timedelta(0):
             raise ValueError("grant ttl must be positive")
         with self._lock:
             if scope.grant_id in self._records:
                 raise ValueError("grant_id already exists")
-            issued_at = self._now(now)
+            issued_at = self._now()
             record = GrantRecord(
                 grant_id=scope.grant_id, scope_digest=scope_digest(scope), issuer=scope.issuer,
                 nonce=secrets.token_urlsafe(24), issued_at_utc=issued_at,
-                expires_at_utc=issued_at + ttl, single_use=single_use,
+                expires_at_utc=issued_at + ttl, single_use=True,
             )
             self._records[scope.grant_id] = record
             return record
@@ -222,10 +225,10 @@ class GrantAuthority:
         with self._lock:
             return self._records.get(grant_id)
 
-    def verify(self, scope: AuthorizationScope, *, now: datetime | None = None):
+    def verify(self, scope: AuthorizationScope):
         with self._lock:
             chain = load_grant_chain(self._records.get, scope.grant_id)
-            return verify_grant_chain(scope, chain, self._now(now)), chain[0] if chain else None
+            return verify_grant_chain(scope, chain, self._now()), chain[0] if chain else None
 
     def revoke(self, grant_id: str) -> bool:
         with self._lock:
@@ -235,11 +238,13 @@ class GrantAuthority:
             self._records[grant_id] = replace(record, revoked=True)
             return True
 
-    def consume(self, scope: AuthorizationScope, *, now: datetime | None = None):
+    def consume(self, scope: AuthorizationScope):
         with self._lock:
-            current = self._now(now)
-            status, record = self.verify(scope, now=current)
-            if status is not GrantStatus.VALID or record is None or not record.single_use:
+            current = self._now()
+            chain = load_grant_chain(self._records.get, scope.grant_id)
+            status = verify_grant_chain(scope, chain, current)
+            record = chain[0] if chain else None
+            if status is not GrantStatus.VALID or record is None:
                 return status, record
             consumed = replace(record, consumed_at_utc=current)
             self._records[scope.grant_id] = consumed
@@ -247,13 +252,13 @@ class GrantAuthority:
 
     def delegate(
         self, parent_scope: AuthorizationScope, child_scope: AuthorizationScope, *,
-        ttl: timedelta = timedelta(minutes=5), now: datetime | None = None,
+        ttl: timedelta = timedelta(minutes=5),
     ) -> GrantRecord:
         with self._lock:
             if child_scope.grant_id in self._records:
                 raise ValueError("grant_id already exists")
             chain = load_grant_chain(self._records.get, parent_scope.grant_id)
-            child = delegated_record(parent_scope, child_scope, chain, now=self._now(now), ttl=ttl)
+            child = delegated_record(parent_scope, child_scope, chain, now=self._now(), ttl=ttl)
             self._records[parent_scope.grant_id] = replace(chain[0], delegated_to=child.grant_id)
             self._records[child.grant_id] = child
             return child

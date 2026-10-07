@@ -29,6 +29,14 @@ class FakeDetector:
         )
 
 
+class MutableClock:
+    def __init__(self, current):
+        self.current = current
+
+    def __call__(self):
+        return self.current
+
+
 class PipelineTests(unittest.TestCase):
     def provenance(self, source_type, trust=TrustLevel.UNTRUSTED):
         return InputProvenance(source_type=source_type, trust_level=trust)
@@ -44,11 +52,14 @@ class PipelineTests(unittest.TestCase):
         return ToolRegistry((ToolManifest(name, tuple(capabilities), version="1"),))
 
     def authority(self, scope, *, expired=False, revoked=False, consumed=False):
-        authority = GrantAuthority()
         if expired:
             old = datetime.now(timezone.utc) - timedelta(minutes=10)
-            authority.issue(scope, ttl=timedelta(minutes=1), now=old)
+            clock = MutableClock(old)
+            authority = GrantAuthority(clock=clock)
+            authority.issue(scope, ttl=timedelta(minutes=1))
+            clock.current = old + timedelta(minutes=10)
         else:
+            authority = GrantAuthority()
             authority.issue(scope)
         if revoked:
             authority.revoke(scope.grant_id)

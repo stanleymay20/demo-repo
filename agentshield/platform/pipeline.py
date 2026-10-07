@@ -3,11 +3,17 @@
 Detector scoring, provenance, capability authorization, authoritative grant lifecycle,
 authoritative tool manifests, action classification, policy and audit are separate so
 that no model output becomes authorization by accident.
+
+Pipeline results produced in-process are sealed with a process-local integrity tag. The
+tag is intentionally not a cross-service credential; detached evaluations must use the
+optional Ed25519 signing path.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+import hashlib
+import hmac
 import secrets
 from typing import Any, Mapping
 
@@ -23,11 +29,63 @@ from .provenance import InputProvenance, TrustLevel
 from .tools import ToolRegistry, ToolVerificationStatus, verify_action_descriptor
 
 
+_PIPELINE_INTEGRITY_SCHEMA = "agentshield-pipeline-integrity-v1"
+_PROCESS_EVALUATION_KEY = secrets.token_bytes(32)
+
+
 @dataclass(frozen=True)
 class PipelineResult:
     detection: DetectionResult
     policy: PolicyDecision
     audit_event: AuditEvent
+    _integrity_tag: str = field(default="", repr=False, compare=False)
+
+
+def pipeline_result_digest(result: PipelineResult) -> str:
+    """Return a canonical digest of the complete authority-relevant evaluation.
+
+    The digest deliberately excludes ``_integrity_tag`` itself. It is suitable as the
+    message authenticated by the process-local seal and by detached Ed25519 signatures.
+    """
+
+    return payload_digest(
+        {
+            "schema": _PIPELINE_INTEGRITY_SCHEMA,
+            "detection": {
+                "content_risk": result.detection.content_risk.value,
+                "score": result.detection.score,
+                "detector_name": result.detection.detector_name,
+                "detector_version": result.detection.detector_version,
+            },
+            "policy": {
+                "decision": result.policy.decision.value,
+                "policy_version": result.policy.policy_version,
+                "reason": result.policy.reason,
+            },
+            "audit_event": result.audit_event.to_dict(),
+        }
+    )
+
+
+def _integrity_tag(result: PipelineResult) -> str:
+    return hmac.new(
+        _PROCESS_EVALUATION_KEY,
+        pipeline_result_digest(result).encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def verify_in_process_evaluation(result: PipelineResult) -> bool:
+    """Verify that an evaluation is unchanged since this process created it.
+
+    This is a same-process integrity boundary, not a substitute for detached signing.
+    Arbitrary code execution inside the trusted host process is outside this mechanism's
+    threat model.
+    """
+
+    if not result._integrity_tag:
+        return False
+    return hmac.compare_digest(_integrity_tag(result), result._integrity_tag)
 
 
 def evaluate_request(
@@ -165,8 +223,9 @@ def evaluate_request(
         detector_score=detection.score,
         metadata=metadata,
     )
-    return PipelineResult(
+    result = PipelineResult(
         detection=detection,
         policy=policy_decision,
         audit_event=event,
     )
+    return replace(result, _integrity_tag=_integrity_tag(result))

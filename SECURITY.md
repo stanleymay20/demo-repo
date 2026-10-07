@@ -18,7 +18,7 @@ Please include:
 - threat model and trust boundary crossed;
 - minimal reproduction;
 - whether a tool side effect actually occurred;
-- whether authorization, scope, provenance, integrity, review or replay controls were bypassed;
+- whether authorization, scope, provenance, decision integrity, review, audit or replay controls were bypassed;
 - logs with secrets and personal data removed.
 
 ## Security invariants
@@ -26,13 +26,16 @@ Please include:
 A release must fail closed when any of these are missing, invalid or changed between evaluation and execution:
 
 - authoritative tool manifest;
-- authorization scope;
-- live grant;
+- authorization scope and exact-effect binding;
+- live single-use grant;
 - action/payload/scope/manifest integrity binding;
-- required human-review approval;
-- known policy decision.
+- authenticated execution decision (trusted in-process seal or detached Ed25519 signature);
+- required human-review approval verified with public keys only;
+- supported policy version.
 
-Prompt-injection detection is evidence, not authority.
+Execution admission is audited after grant consumption and before dispatch. Dispatch success/failure is emitted as a second structured audit event without raw payload/output or exception text. Production deployments must provide durable audit persistence and externally anchor the chain head if tail-truncation detection is required across writer compromise.
+
+Prompt-injection detection is evidence, not authority. Detector failure must not expand the set of host-authorized effects.
 
 ## Disclosure
 

@@ -13,7 +13,8 @@ The v1 evidence path therefore separates:
 - **signed decision evidence** for ALLOW, REVIEW and BLOCK;
 - **execution lifecycle evidence** for admitted actions;
 - **portable JSON bundles** that can be taken away and checked offline;
-- **external trust anchors** supplied independently from the bundle.
+- **durable multi-worker persistence** for one serialized evidence stream;
+- **external trust anchors** supplied independently from the bundle and database.
 
 ## Cryptographic model
 
@@ -25,12 +26,12 @@ Each envelope binds:
 
 - envelope schema version;
 - signature algorithm;
-- sequence number;
+- zero-based contiguous sequence number;
 - previous-envelope hash;
 - canonical event hash;
 - key ID.
 
-The next envelope hashes the complete previous envelope, creating an ordered chain.
+The next envelope hashes the complete previous envelope, creating an ordered chain. `verify_chain()` identifies the first broken event/link/signature.
 
 ## Decision evidence
 
@@ -40,9 +41,21 @@ The next envelope hashes the complete previous envelope, creating an ordered cha
 - REVIEW;
 - BLOCK.
 
-A configured durable sink failure propagates instead of silently returning an unaudited decision. Existing callers that do not opt into an evidence trail retain the legacy API behavior; such calls must not be advertised as producing independent receipts.
+A configured durable sink/trail failure propagates instead of silently returning an unaudited decision. Existing callers that do not opt into an evidence trail retain the legacy API behavior; such calls must not be advertised as producing independent receipts.
 
-No raw prompt, action payload or tool output is added by the evidence layer. The existing evaluation event carries digests and structured policy metadata.
+No raw prompt, action payload or tool output is added by the evidence layer. The evaluation event carries digests and structured policy metadata.
+
+## Acting-for identity
+
+`AuthorizationScope` now distinguishes:
+
+- `issuer`: authority that minted the grant;
+- `principal`: end-user/service on whose behalf the agent acts;
+- `tenant`: containing organization/account.
+
+Principal and tenant are part of `agentshield-scope-v3` and therefore part of the authoritative scope digest. They cannot be changed while reusing an issued grant, and delegation must preserve both fields. Signed decision evidence surfaces issuer/principal/tenant together with the scope digest.
+
+**Migration:** grants issued against the older v2 scope digest must be reissued by trusted infrastructure. Failing closed on an old digest is intentional; the runtime must not silently reinterpret old grants as identity-bound authority.
 
 ## Portable evidence bundles
 
@@ -70,32 +83,57 @@ A successful verification establishes that, relative to the supplied public-key 
 
 1. every event matches its signed hash;
 2. every Ed25519 signature is valid;
-3. record order and previous-envelope links are intact;
+3. sequence/order and previous-envelope links are intact;
 4. the chain head can be independently recomputed.
 
-It does **not** by itself prove that the signing service was uncompromised, that the public-key distribution channel is trustworthy, or that no signed suffix was truncated after the last externally anchored head.
+It does **not** by itself prove that the signing service was uncompromised, that the public-key distribution channel is trustworthy, or that no valid signed suffix was removed after the latest externally anchored head.
+
+## Durable PostgreSQL evidence stream
+
+`PostgresAuditTrail` is the multi-worker persistence path. It:
+
+- accepts Ed25519 signers only;
+- obtains a transaction-scoped advisory lock per table/stream;
+- reads the current database head while holding that lock;
+- signs the next envelope against that exact head;
+- persists event + envelope in one transaction;
+- can reload the chain for offline public-key verification;
+- exposes the current head hash for external anchoring.
+
+The integration suite races multiple workers against one stream and verifies that one contiguous chain is produced.
+
+## External anchoring boundary
+
+`HeadAnchorPublisher` / `publish_head_anchor()` define the handoff to an independently controlled transparency log, object-lock store, timestamping service or equivalent system. The runtime refuses to describe HMAC chains as independently anchorable evidence.
+
+**The repository does not ship or configure an external anchoring provider.** A fake local anchor would not improve the trust model. Deployment evidence is only externally anchored once a real independently controlled provider accepts the chain-head statement and returns a durable reference.
+
+## End-to-end refusal demonstration
+
+`examples/agentshield_verifiable_block_demo.py` proposes a destructive `delete_data` action against `production.users`, receives a policy BLOCK, exports the signed BLOCK event, and prints the public key needed by the standalone verifier. The demonstration does not connect to or delete from a real database.
+
+The test suite then invokes `tools/agentshield_verify.py` in a separate process and proves that rewriting the decision or signed event is detected.
 
 ## Still open before an external GA claim
 
 This branch intentionally does not paper over the remaining work:
 
-1. **Principal / tenant binding.** The existing scope has an issuer but not a distinct end-user principal and tenant. These must be added through a versioned authorization-scope migration and preserved through delegation before receipts claim "acting for" identity.
-2. **Durable evidence sink.** The `AuditSink` interface exists, but a production PostgreSQL receipt/evidence sink still needs to ship and be tested across workers.
-3. **External head anchoring.** A chain can still be tail-truncated by a compromised writer unless recent head hashes are published outside the writer's control (for example object-lock storage or a transparency service).
-4. **Independent security review.** Internal and AI-assisted review is not a substitute for an external human/security review of the final diff.
-5. **Repository/admin GA gates.** Main-branch protection, required checks/reviews, license choice and canonical-main convergence remain separate release gates.
-6. **Detector claims.** Verifiable governance evidence does not establish universal prompt-injection detection or a 99.999% prevention rate.
+1. **Real external head anchoring.** Configure and operationally prove an independently controlled anchor provider; the integration contract alone is not an external anchor.
+2. **Independent security review.** Internal and AI-assisted review is not a substitute for an external human/security review of the final diff.
+3. **Repository/admin GA gates.** Main-branch protection, required checks/reviews, license choice and canonical-main convergence remain separate release gates.
+4. **Production key management.** Private signing keys must be held outside agent control, rotated deliberately, and distributed to verifiers through an authenticated public-key channel.
+5. **Detector claims.** Verifiable governance evidence does not establish universal prompt-injection detection or a 99.999% prevention rate.
 
 ## Safe claim boundary for this draft
 
-Once the exact-head tests are green, it is reasonable to say:
+Only after the exact-head test matrix is green, it is reasonable to say:
 
-> AgentShield has a draft Ed25519-signed evidence path that can record ALLOW, REVIEW and BLOCK decisions, export a portable hash-chained JSON bundle, and verify that bundle offline with public keys only.
+> AgentShield has a draft Ed25519-signed evidence layer that records ALLOW, REVIEW and BLOCK decisions, cryptographically binds acting principal/tenant identity into authorization, persists one serialized evidence chain across PostgreSQL workers, exports a portable hash-chained JSON bundle, and verifies that bundle offline with public keys only.
 
 Do not yet say:
 
 - every AgentShield deployment produces independent receipts;
-- receipts prove an end-user/tenant identity;
-- the history is externally anchored or impossible to truncate;
+- production history is externally anchored or impossible to truncate;
 - the format is an adopted IETF standard;
+- the implementation has received the required independent human security review;
 - AgentShield is 100% secure or has measured five-nines unauthorized-consequence prevention.

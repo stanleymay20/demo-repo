@@ -15,6 +15,7 @@ from .events import ExecutionAuditEvent, evaluation_digest
 from .effects import effect_digest, check_effect_scope
 from .pipeline import pipeline_result_digest, verify_in_process_evaluation
 from .policy import ActionRisk, ContentRisk, Decision, PolicyInput, decide
+from .postgres_audit import PostgresAuditTrail
 from .postgres_grants import PostgresGrantAuthority
 from .provenance import InputProvenance, TrustLevel
 from .receipts import (
@@ -55,6 +56,7 @@ __all__ = [
     "ExecutionAuditEvent",
     "InputProvenance",
     "PolicyInput",
+    "PostgresAuditTrail",
     "PostgresGrantAuthority",
     "ReviewApproval",
     "ReviewSigner",

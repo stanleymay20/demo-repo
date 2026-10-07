@@ -195,6 +195,8 @@ class AuditSigner:
             return AuditVerificationStatus.UNKNOWN_KEY
         if envelope.event_hash != event_hash(event):
             return AuditVerificationStatus.EVENT_MISMATCH
+        if previous is None and envelope.sequence != 0:
+            return AuditVerificationStatus.CHAIN_MISMATCH
 
         expected_previous = None if previous is None else envelope_hash(previous)
         if envelope.previous_envelope_hash != expected_previous:
@@ -302,6 +304,8 @@ class Ed25519AuditVerifier:
             return AuditVerificationStatus.UNKNOWN_KEY
         if envelope.event_hash != event_hash(event):
             return AuditVerificationStatus.EVENT_MISMATCH
+        if previous is None and envelope.sequence != 0:
+            return AuditVerificationStatus.CHAIN_MISMATCH
 
         expected_previous = None if previous is None else envelope_hash(previous)
         if envelope.previous_envelope_hash != expected_previous:
@@ -389,6 +393,12 @@ def verify_chain(
         )
     previous: AuditEnvelope | None = None
     for index, (envelope, event) in enumerate(zip(envelopes, events)):
+        if envelope.sequence != index:
+            return ChainVerificationResult(
+                AuditVerificationStatus.CHAIN_MISMATCH,
+                verified_count=index,
+                first_invalid_index=index,
+            )
         status = verifier.verify(envelope, event, previous=previous)
         if status is not AuditVerificationStatus.VALID:
             return ChainVerificationResult(status, verified_count=index, first_invalid_index=index)

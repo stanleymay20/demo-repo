@@ -1,9 +1,11 @@
 """AgentShield layered agent-security platform primitives."""
 
 from .anchors import (
+    AnchorPublication,
     AnchorReceipt,
     HeadAnchorPublisher,
     HeadAnchorStatement,
+    anchor_statement_digest,
     build_head_anchor_statement,
     publish_head_anchor,
 )
@@ -44,6 +46,7 @@ from .tools import ToolManifest, ToolRegistry, ToolVerificationStatus
 
 __all__ = [
     "ActionRisk",
+    "AnchorPublication",
     "AnchorReceipt",
     "AuditEnvelope",
     "AuditSigner",
@@ -77,6 +80,7 @@ __all__ = [
     "ToolRegistry",
     "ToolVerificationStatus",
     "TrustLevel",
+    "anchor_statement_digest",
     "build_bundle",
     "build_head_anchor_statement",
     "bundle_digest",

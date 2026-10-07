@@ -2,7 +2,7 @@
 
 Status: **draft / stacked on the PR #9 remediation branch**. This document describes the current verified code contract, not a production-GA deployment claim.
 
-Latest exact code head verified before this documentation-only convergence: `337c26f07298dedd21ab8ff907f9fb2ed780ce6d`.
+Latest exact code head verified before this documentation-only convergence: `337c26f07298dedd21ab8ff907f9fb2ed780ce6d`. The independent audit of 2026-10-07 (`audits/PR10_INDEPENDENT_AUDIT_2026-10-07.md`) audited `e7c64ea5155d8b2717ed8b3cbb3de85010541e7d` and added remediation commits on top; the sections below reflect the remediated contract.
 
 - AgentShield GA `37676075777`: SUCCESS
 - AgentShield CodeQL `37676075749`: SUCCESS
@@ -132,6 +132,8 @@ Runtime and standalone receipt verification then checks that:
 
 Missing, tampered, duplicate, unreferenced or unknown-key review proofs fail closed.
 
+Review proofs are accepted only in their exact canonical signed form: UTC ISO-8601 timestamps as emitted by the review service and a 128-character lowercase hex signature. The execution gateway applies the same signature-encoding rule. Re-encoded timestamps or alternate signature encodings are rejected, so one signed approval has exactly one accepted `review_approval_digest` and the two verifiers cannot disagree.
+
 ## Portable evidence bundle
 
 The current draft profile is:
@@ -145,7 +147,21 @@ Public keys are deliberately not embedded as trusted roots. Verifiers receive ex
 
 `record_type` is not trusted as free-form wrapper metadata: both verifiers derive the expected type from the signed event schema and reject semantic relabelling.
 
-The current v1 profile understands the policy-decision and execution-event schemas implemented by this branch. A future execution-event schema must not be treated as understood v1 authority semantics merely because it carries a valid audit signature; explicit profile/verifier support and regressions are required when schema versions evolve.
+The v1 profile understands exactly two AgentShield event schemas: `agentshield-audit-event-v1` (policy decision) and `agentshield-execution-audit-event-v2` (execution lifecycle). Any other `agentshield-*` event schema is `unsupported`: the exporter refuses it and both verifiers fail closed. It is neither promoted to v1 execution semantics nor demoted to an opaque record that would escape the execution and review linkage checks. Non-AgentShield host events remain opaque `audit_event` records.
+
+The bundle and each record must have exactly the v1 field set. Unsigned wrapper fields (for example a `"verified": true` or `"audited_by"` banner) are rejected rather than carried alongside evidence that verifies.
+
+### Execution-to-decision linkage
+
+A valid audit signature proves only that the evidence writer emitted a record. Both verifiers therefore additionally require that every execution-lifecycle record:
+
+- has the exact v2 execution-event field set, valid digests and a valid phase/status pair;
+- resolves to exactly one *earlier* signed policy decision with the same request ID and evaluation digest;
+- carries the same decision (only ALLOW or REVIEW can execute), policy version, action name, grant ID and exact-effect digest as that decision;
+- executes an effect that is a member of the decision's independently reconstructed scope commitment;
+- follows lifecycle order: one `grant_consumed`, then at most one `dispatch_completed`.
+
+A receipt that shows an execution without its authorizing decision is therefore not a valid v1 receipt. This is what lets an outsider check "authority before execution" without trusting the writer's semantic consistency.
 
 The format is AgentShield-native and designed to map cleanly onto emerging agent-action-receipt work. It does not claim conformance to an adopted final IETF standard.
 
@@ -179,7 +195,8 @@ A successful verification establishes, relative to the supplied trust anchors, t
 7. authorization-scope commitments are internally reconstructable and consistent;
 8. v4 machine/purpose/immediate-parent identity metadata agrees with the committed scope;
 9. any reviewed execution has a separately valid reviewer signature and matching authority/evaluation bindings;
-10. the chain head can be independently and stably recomputed.
+10. every execution transition resolves to exactly one earlier signed authorizing decision with matching decision, action, grant and in-scope exact effect;
+11. the chain head can be independently and stably recomputed.
 
 It does not prove that signing services were uncompromised or that the public-key distribution channel itself was trustworthy.
 
@@ -196,6 +213,8 @@ It does not prove that signing services were uncompromised or that the public-ke
 - exposes the current head hash for external anchoring.
 
 Integration tests exercise concurrent workers and verify one contiguous chain.
+
+JSONB is not a byte-faithful JSON store: it drops negative zero and rewrites exponent-form floats (`1e16` reloads as the integer `10000000000000000`). Each append therefore reads the stored event back inside its transaction and refuses to commit if the stored form no longer hashes to the signed event hash. A lossy event fails the append (and so the governed flow) instead of silently making the stream unverifiable from that record on. Detector scores of `-0.0` are normalized to `0.0` at the source.
 
 `PostgresGrantAuthority` provides atomic single-use grant lifecycle and delegation with database-owned time and root-to-leaf locking. It enforces the same v3/v4 identity and delegation rules as the in-memory authority.
 

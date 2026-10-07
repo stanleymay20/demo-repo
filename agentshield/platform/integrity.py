@@ -18,7 +18,8 @@ from .authorization import AuthorizationScope
 from .tools import ToolManifest
 
 MAX_PAYLOAD_DEPTH = 64
-SCOPE_SCHEMA_VERSION = "agentshield-scope-v3"
+SCOPE_SCHEMA_V3 = "agentshield-scope-v3"
+SCOPE_SCHEMA_V4 = "agentshield-scope-v4-agent-purpose"
 
 
 def snapshot_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -99,13 +100,14 @@ def action_digest(action: ActionDescriptor) -> str:
 def scope_material(scope: AuthorizationScope) -> dict[str, Any]:
     """Return the privacy-safe canonical material committed by ``scope_digest``.
 
-    Exact effects are represented only by their existing SHA-256 commitments. No raw
-    action payloads are exposed. The returned mapping is safe to place inside signed
-    decision evidence so an offline verifier can independently recompute the scope digest.
+    Legacy scopes remain v3 so previously issued pre-agent-identity grants do not silently
+    acquire claims they never carried. A scope that explicitly binds ``agent_id`` and
+    host-controlled ``purpose_id`` uses v4 and also commits the immediate delegator agent.
+    Exact effects remain SHA-256 commitments; no raw action payload is exposed.
     """
 
-    return {
-        "scope_schema": SCOPE_SCHEMA_VERSION,
+    material: dict[str, Any] = {
+        "scope_schema": SCOPE_SCHEMA_V3,
         "grant_id": scope.grant_id,
         "issuer": scope.issuer,
         "principal": scope.principal,
@@ -113,6 +115,16 @@ def scope_material(scope: AuthorizationScope) -> dict[str, Any]:
         "allowed_capabilities": list(scope.allowed_capabilities),
         "allowed_effects": list(scope.allowed_effects),
     }
+    if scope.machine_identity_bound:
+        material.update(
+            {
+                "scope_schema": SCOPE_SCHEMA_V4,
+                "agent_id": scope.agent_id,
+                "purpose_id": scope.purpose_id,
+                "delegator_agent_id": scope.delegator_agent_id,
+            }
+        )
+    return material
 
 
 def scope_digest(scope: AuthorizationScope) -> str:

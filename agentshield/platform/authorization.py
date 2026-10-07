@@ -29,8 +29,8 @@ class AuthorizationScope:
 
     Legacy scopes may omit machine identity. New machine-bound scopes set both
     ``agent_id`` and host-controlled ``purpose_id``. A delegated machine-bound child also
-    records the immediate ``delegator_agent_id``. These values are authority material,
-    not model-supplied display metadata.
+    commits both the immediate parent agent and the immediate parent grant. These values
+    are authority material, not model-supplied display metadata.
     """
 
     grant_id: str
@@ -42,6 +42,7 @@ class AuthorizationScope:
     agent_id: str | None = None
     purpose_id: str | None = None
     delegator_agent_id: str | None = None
+    delegator_grant_id: str | None = None
 
     def __post_init__(self) -> None:
         grant_id = self.grant_id.strip()
@@ -53,7 +54,8 @@ class AuthorizationScope:
         object.__setattr__(self, "grant_id", grant_id)
         object.__setattr__(self, "issuer", issuer)
         for field in (
-            "principal", "tenant", "agent_id", "purpose_id", "delegator_agent_id"
+            "principal", "tenant", "agent_id", "purpose_id",
+            "delegator_agent_id", "delegator_grant_id",
         ):
             value = getattr(self, field)
             if value is not None:
@@ -62,8 +64,14 @@ class AuthorizationScope:
                 object.__setattr__(self, field, value.strip())
         if (self.agent_id is None) != (self.purpose_id is None):
             raise ValueError("agent_id and purpose_id must either both be present or both be absent")
+        if (self.delegator_agent_id is None) != (self.delegator_grant_id is None):
+            raise ValueError(
+                "delegator_agent_id and delegator_grant_id must either both be present or both be absent"
+            )
         if self.agent_id is None and self.delegator_agent_id is not None:
-            raise ValueError("delegator_agent_id requires machine-bound agent_id and purpose_id")
+            raise ValueError(
+                "delegator identity requires machine-bound agent_id and purpose_id"
+            )
         object.__setattr__(
             self,
             "allowed_capabilities",
@@ -80,6 +88,10 @@ class AuthorizationScope:
     @property
     def machine_identity_bound(self) -> bool:
         return self.agent_id is not None
+
+    @property
+    def delegated_machine_authority(self) -> bool:
+        return self.delegator_grant_id is not None
 
 
 def check_action_scope(

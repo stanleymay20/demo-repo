@@ -66,7 +66,7 @@ jobs:
         run: python -m unittest discover -s agentshield/tests -p 'test_platform_*.py' -v
 
   postgres:
-    name: PostgreSQL atomic-grant integration
+    name: PostgreSQL grant + evidence integration
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -97,8 +97,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e '.[full]'
           python -m pip check
-      - name: Atomic grant tests
-        run: python -m unittest agentshield.tests.test_platform_postgres_grants -v
+      - name: PostgreSQL authority and evidence tests
+        run: |
+          python -m unittest agentshield.tests.test_platform_postgres_grants -v
+          python -m unittest agentshield.tests.test_platform_postgres_audit -v
 
   package:
     name: Wheel / SBOM

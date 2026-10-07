@@ -80,6 +80,10 @@ def valid_hex_digest(value):
     return type(value) is str and len(value) == 64 and all(c in HEX_CHARS for c in value)
 
 
+def valid_ed25519_signature_hex(value):
+    return type(value) is str and len(value) == 128 and all(c in HEX_CHARS for c in value)
+
+
 def valid_optional_identity(value):
     return value is None or (type(value) is str and bool(value.strip()) and value == value.strip())
 
@@ -357,12 +361,14 @@ def verify(bundle, keys, review_keys=None):
             "schema_version", "sequence", "previous_envelope_hash", "event_hash",
             "key_id", "signature", "algorithm",
         }
-        if not required.issubset(envelope):
-            return False, "envelope is missing required fields", index, None
+        if set(envelope) != required:
+            return False, "envelope fields do not match schema", index, None
         if envelope["schema_version"] != ENVELOPE_SCHEMA:
             return False, "unsupported envelope schema", index, None
         if envelope["algorithm"] != ALGORITHM:
             return False, "non-Ed25519 envelope is not independently verifiable", index, None
+        if not valid_ed25519_signature_hex(envelope.get("signature")):
+            return False, "signature is not canonical lowercase Ed25519 hex", index, None
         if envelope["sequence"] != index:
             return False, "envelope sequence is not contiguous from zero", index, None
         expected_previous = None if previous is None else envelope_hash(previous)

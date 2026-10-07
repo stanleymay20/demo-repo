@@ -3,12 +3,13 @@
 
 Dependencies: Python standard library + ``cryptography`` only.
 It deliberately does not import the AgentShield runtime, contact a server, or require a
-secret key. The verifier accepts trust anchors explicitly as ``KEY_ID=PUBLIC_KEY_HEX``.
+secret key. Audit and human-review public keys are supplied as independent trust anchors.
 """
 
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -23,9 +24,16 @@ RECEIPT_PROFILE = "agentshield-verifiable-action-receipt-v1"
 ENVELOPE_SCHEMA = "agentshield-audit-envelope-v2"
 ALGORITHM = "ed25519"
 SCOPE_SCHEMA = "agentshield-scope-v3"
+REVIEW_SCHEMA = "agentshield-review-v3-ed25519"
 SCOPE_KEYS = {
     "scope_schema", "grant_id", "issuer", "principal", "tenant",
     "allowed_capabilities", "allowed_effects",
+}
+REVIEW_KEYS = {
+    "review_schema", "evaluation_digest", "approval_id", "request_id",
+    "action_digest", "payload_digest", "scope_digest", "tool_manifest_digest",
+    "policy_version", "reviewer", "issued_at_utc", "expires_at_utc", "key_id",
+    "signature",
 }
 HEX_CHARS = frozenset("0123456789abcdef")
 
@@ -115,15 +123,38 @@ def scope_evidence_error(event):
     return None
 
 
-def parse_keys(values):
+def evaluation_digest(event):
+    metadata = event.get("metadata")
+    if type(metadata) is not dict:
+        return None
+    for field in ("evaluation_id", "content_digest", "provenance_digest"):
+        if not valid_hex_digest(metadata.get(field)):
+            return None
+    return hashlib.sha256(canonical_bytes({
+        "review_schema": "agentshield-review-evaluation-v1",
+        "event": event,
+    })).hexdigest()
+
+
+def parse_time(value):
+    if type(value) is not str:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return None if moment.tzinfo is None else moment.astimezone(timezone.utc)
+
+
+def parse_keys(values, *, option, required):
     keys = {}
     for value in values:
         if "=" not in value:
-            raise ValueError("--pubkey must use KEY_ID=PUBLIC_KEY_HEX")
+            raise ValueError(f"{option} must use KEY_ID=PUBLIC_KEY_HEX")
         key_id, encoded = value.split("=", 1)
         key_id = key_id.strip()
         if not key_id:
-            raise ValueError("public key id must be non-empty")
+            raise ValueError(f"{option} key id must be non-empty")
         try:
             raw = bytes.fromhex(encoded.strip())
         except ValueError as exc:
@@ -131,12 +162,150 @@ def parse_keys(values):
         if len(raw) != 32:
             raise ValueError(f"public key {key_id!r} must contain 32 raw bytes")
         keys[key_id] = Ed25519PublicKey.from_public_bytes(raw)
-    if not keys:
-        raise ValueError("at least one --pubkey trust anchor is required")
+    if required and not keys:
+        raise ValueError(f"at least one {option} trust anchor is required")
     return keys
 
 
-def verify(bundle, keys):
+def review_proof_digest(proof):
+    return hashlib.sha256(canonical_bytes(proof)).hexdigest()
+
+
+def verify_review_signature(proof, keys):
+    if type(proof) is not dict or set(proof) != REVIEW_KEYS:
+        return False, "malformed review approval proof"
+    if proof.get("review_schema") != REVIEW_SCHEMA:
+        return False, "unsupported review approval schema"
+    for field in (
+        "approval_id", "request_id", "action_digest", "payload_digest", "scope_digest",
+        "tool_manifest_digest", "policy_version", "evaluation_digest", "reviewer", "key_id",
+        "signature",
+    ):
+        value = proof.get(field)
+        if type(value) is not str or not value.strip():
+            return False, f"review approval field {field} is invalid"
+    if not valid_hex_digest(proof["evaluation_digest"]):
+        return False, "review approval evaluation digest is invalid"
+    issued = parse_time(proof.get("issued_at_utc"))
+    expires = parse_time(proof.get("expires_at_utc"))
+    if issued is None or expires is None or expires <= issued:
+        return False, "review approval time window is invalid"
+    key = keys.get(proof["key_id"])
+    if key is None:
+        return False, f"unknown review public key id: {proof['key_id']}"
+    try:
+        signature = bytes.fromhex(proof["signature"])
+    except ValueError:
+        return False, "review approval signature is not valid hex"
+    material = dict(proof)
+    material.pop("signature")
+    try:
+        key.verify(signature, canonical_bytes(material))
+    except InvalidSignature:
+        return False, "invalid human-review Ed25519 signature"
+    return True, None
+
+
+def verify_review_proofs(bundle, records, review_keys):
+    approvals = bundle.get("review_approvals", [])
+    if type(approvals) is not list or any(type(item) is not dict for item in approvals):
+        return "review_approvals must be a list of objects", len(records)
+
+    refs = {}
+    for index, record in enumerate(records):
+        if record.get("record_type") != "execution_lifecycle":
+            continue
+        event = record["event"]
+        digest = event.get("review_approval_digest")
+        decision = event.get("decision")
+        if decision == "review" and not valid_hex_digest(digest):
+            return "executed REVIEW evidence lacks a valid review approval digest", index
+        if digest is not None:
+            if decision != "review" or not valid_hex_digest(digest):
+                return "review approval digest is inconsistent with execution decision", index
+            refs.setdefault(digest, []).append((index, event))
+
+    if not refs:
+        if approvals:
+            return "bundle contains unreferenced human-review approval proofs", len(records)
+        return None, None
+    if not review_keys:
+        return "human-review public key trust anchor is required", min(v[0][0] for v in refs.values())
+
+    proofs = {}
+    for proof in approvals:
+        digest = review_proof_digest(proof)
+        if digest in proofs:
+            return "duplicate human-review approval proof", len(records)
+        valid, reason = verify_review_signature(proof, review_keys)
+        if not valid:
+            index = refs[digest][0][0] if digest in refs else len(records)
+            return reason, index
+        proofs[digest] = proof
+
+    if set(proofs) != set(refs):
+        missing = set(refs) - set(proofs)
+        if missing:
+            return "portable receipt is missing the referenced human-review proof", min(refs[d][0][0] for d in missing)
+        return "bundle contains unreferenced human-review approval proofs", len(records)
+
+    decisions = []
+    for index, record in enumerate(records):
+        if record.get("record_type") != "policy_decision":
+            continue
+        digest = evaluation_digest(record["event"])
+        if digest:
+            decisions.append((index, record["event"], digest))
+
+    for digest, linked_events in refs.items():
+        proof = proofs[digest]
+        matches = [
+            event for _, event, eval_digest in decisions
+            if event.get("request_id") == proof["request_id"]
+            and event.get("decision") == "review"
+            and eval_digest == proof["evaluation_digest"]
+        ]
+        if len(matches) != 1:
+            return "human-review proof does not resolve to exactly one signed REVIEW decision", linked_events[0][0]
+        decision_event = matches[0]
+        metadata = decision_event.get("metadata")
+        if type(metadata) is not dict:
+            return "signed REVIEW decision lacks binding metadata", linked_events[0][0]
+        expected = (
+            metadata.get("action_digest"),
+            metadata.get("payload_digest"),
+            metadata.get("authorization_scope_digest"),
+            metadata.get("tool_manifest_digest"),
+            decision_event.get("policy_version"),
+        )
+        observed = (
+            proof["action_digest"], proof["payload_digest"], proof["scope_digest"],
+            proof["tool_manifest_digest"], proof["policy_version"],
+        )
+        if observed != expected:
+            return "human-review proof does not match signed decision authority", linked_events[0][0]
+
+        consumed = []
+        for index, event in linked_events:
+            if (
+                event.get("request_id") != proof["request_id"]
+                or event.get("evaluation_digest") != proof["evaluation_digest"]
+                or event.get("policy_version") != proof["policy_version"]
+            ):
+                return "human-review proof does not match signed execution evidence", index
+            if event.get("phase") == "grant_consumed" and event.get("status") == "admitted":
+                moment = parse_time(event.get("timestamp_utc"))
+                if moment is None:
+                    return "reviewed execution timestamp is invalid", index
+                consumed.append(moment)
+        issued = parse_time(proof["issued_at_utc"])
+        expires = parse_time(proof["expires_at_utc"])
+        if len(consumed) != 1 or not (issued <= consumed[0] < expires):
+            return "human-review approval was not valid at grant consumption", linked_events[0][0]
+    return None, None
+
+
+def verify(bundle, keys, review_keys=None):
     if type(bundle) is not dict:
         return False, "bundle is not a JSON object", 0, None
     if bundle.get("schema_version") != BUNDLE_SCHEMA:
@@ -194,24 +363,32 @@ def verify(bundle, keys):
                 return False, semantic_error, index, None
         previous = envelope
 
+    review_error, review_index = verify_review_proofs(bundle, records, review_keys or {})
+    if review_error:
+        return False, review_error, review_index, None
     head = envelope_hash(previous)
     return True, "valid", len(records), head
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Verify an AgentShield evidence bundle offline with Ed25519 public keys."
+        description="Verify AgentShield audit evidence and human-review proofs offline."
     )
     parser.add_argument("bundle", help="Path to AgentShield evidence bundle JSON")
     parser.add_argument(
         "--pubkey", action="append", default=[], metavar="KEY_ID=HEX",
-        help="Trusted raw Ed25519 public key (32-byte hex); repeat for key rotation",
+        help="Trusted raw audit Ed25519 public key; repeat for key rotation",
+    )
+    parser.add_argument(
+        "--review-pubkey", action="append", default=[], metavar="KEY_ID=HEX",
+        help="Trusted raw human-review Ed25519 public key; required for REVIEW execution proofs",
     )
     args = parser.parse_args(argv)
     try:
-        keys = parse_keys(args.pubkey)
+        keys = parse_keys(args.pubkey, option="--pubkey", required=True)
+        review_keys = parse_keys(args.review_pubkey, option="--review-pubkey", required=False)
         bundle = json.loads(Path(args.bundle).read_text(encoding="utf-8"))
-        valid, reason, verified, head = verify(bundle, keys)
+        valid, reason, verified, head = verify(bundle, keys, review_keys)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         print(json.dumps({"valid": False, "error": str(exc)}), file=sys.stderr)
         return 2

@@ -52,6 +52,14 @@ class ReceiptBundleTests(unittest.TestCase):
         self.assertEqual(result.first_invalid_index, 1)
         self.assertEqual(result.verified_count, 1)
 
+    def test_bundle_rejects_semantic_record_type_relabeling(self):
+        bundle = json.loads(build_bundle(self.trail.envelopes, self.trail.events).to_json())
+        bundle["records"][1]["record_type"] = "policy_decision"
+        result = verify_bundle(bundle, self.public_keys)
+        self.assertIs(result.status, AuditVerificationStatus.EVENT_MISMATCH)
+        self.assertEqual(result.first_invalid_index, 1)
+        self.assertEqual(result.verified_count, 1)
+
     def test_bundle_rejects_hmac_as_independent_evidence(self):
         from agentshield.platform.audit import AuditSigner
 

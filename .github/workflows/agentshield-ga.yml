@@ -8,10 +8,13 @@ on:
       - agentshield-ga-hardening-2026-09-29
       - agentshield-ga-integration-2026-09-29
       - agentshield-pr6-audit-remediation
+      - agentshield-verifiable-evidence-v1
     paths:
       - 'agentshield/platform/**'
       - 'agentshield/tests/**'
       - 'agentshield/__init__.py'
+      - 'agentshield/VERIFIABLE_EVIDENCE_V1.md'
+      - 'tools/agentshield_verify.py'
       - 'pyproject.toml'
       - 'SECURITY.md'
       - 'CONTRIBUTING.md'
@@ -21,6 +24,8 @@ on:
       - 'agentshield/platform/**'
       - 'agentshield/tests/**'
       - 'agentshield/__init__.py'
+      - 'agentshield/VERIFIABLE_EVIDENCE_V1.md'
+      - 'tools/agentshield_verify.py'
       - 'pyproject.toml'
       - 'SECURITY.md'
       - 'CONTRIBUTING.md'

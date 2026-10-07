@@ -4,161 +4,158 @@ Date: 2026-10-07
 
 PR: #10 `AgentShield: verifiable evidence layer v1`
 
-Audit baseline initially reviewed: `55a14ed157600b1de31a0def2a930496e36abcea`
+Initial forensic baseline: `55a14ed157600b1de31a0def2a930496e36abcea`
 
-Current remediation head at the time this audit note was created: `8a043f177872267d8db7aac0fd4a1a650d659e8e`
+Current exact remediation head: `b045a1ad83e7da09fb7ee5709d39480e756dcedf`
 
-Status: **BLOCK — do not merge yet**
+Status: **INTERNAL CODE GATES PASS — KEEP DRAFT / DO NOT MERGE YET**
 
-This is a read/repair forensic pass against the evidence and authority claims of PR #10. It does not weaken security, scientific-integrity, CI, release, or review gates. `main` remains untouched.
+This audit reviewed and repaired the authority/evidence path without weakening security, scientific-integrity, CI, review, or release gates. `main` remains untouched.
 
-## Scope of review
+## Exact-head verification
 
-The review follows the authority/evidence path end to end:
+At `b045a1ad83e7da09fb7ee5709d39480e756dcedf`:
 
-1. authorization identity and scope binding;
-2. delegation preservation;
-3. policy decision evidence;
-4. human-review binding;
-5. execution lifecycle evidence;
-6. portable receipt semantics;
-7. standalone offline verification;
-8. PostgreSQL durable evidence;
-9. external head anchoring.
+- AgentShield GA run `37661044524`: **SUCCESS**
+- AgentShield CodeQL run `37661044447`: **SUCCESS**
 
-## Findings
+Earlier milestone heads also earned exact-head green evidence:
+
+- F1/F2 remediation head `78e72cafc34ff980fa72eac1e27a80a33fa7697b`: GA `37657250761` SUCCESS; CodeQL `37657250638` SUCCESS.
+- F3 portable-review head `b570f732c62d883346524c8c06ab7a5e21833f63`: GA `37658292575` SUCCESS; CodeQL `37658292635` SUCCESS.
+
+## Findings and disposition
 
 ### F1 — Portable record type was not authenticated semantically
 
-Severity: **High**
+Severity: **High**  
+Status: **CLOSED**
 
-Status: **Remediated in branch; exact-head CI still required**
-
-The audit envelope signs the event, not the outer `EvidenceRecord.record_type`. Before remediation, a valid signed execution event could be relabelled as `policy_decision` (or vice versa) without changing the signed event or envelope. Both `verify_bundle()` and the standalone verifier ignored the wrapper field and would still accept the cryptographic chain.
-
-This is not an Ed25519 forgery, but it is a dangerous semantic-integrity failure for consumers that dispatch logic based on `record_type`.
+Before remediation, `EvidenceRecord.record_type` was outside the signed event and verifiers did not re-derive it. A valid signed execution event could therefore be relabelled as a policy decision without forging Ed25519.
 
 Remediation:
 
-- `verify_bundle()` now derives the expected record type from the signed event schema and fails closed on mismatch;
-- `tools/agentshield_verify.py` now requires `record_type` and independently derives/compares it;
-- in-process and standalone regressions were added for record relabelling.
+- runtime and standalone verifiers derive the expected record type from the signed event schema;
+- semantic relabelling fails closed;
+- regressions cover in-process and separate-process verification.
 
-Remediation commits:
+### F2 — Receipt did not independently prove authorization-scope material
 
-- `a15681f0c63ee8b1b962b9e263cd34620f516466`
-- `a4954a188b9a59794d713f1d1c14741a594a9e0b`
-- `e1d167fbeb913596087c1fc75ea5c38c176a01a7`
-- `8a043f177872267d8db7aac0fd4a1a650d659e8e`
+Severity: **High**  
+Status: **CLOSED**
 
-Do not mark closed for release until exact-head GA and CodeQL are green.
+The receipt previously exposed a scope digest plus selected identity fields but not the complete privacy-safe canonical material needed for an outsider to recompute the digest.
 
-### F2 — Receipt does not yet independently prove the authorization-scope material
+Remediation:
 
-Severity: **High**
+- `scope_material()` defines the canonical privacy-safe authority projection;
+- signed decision evidence carries that material;
+- runtime and standalone verifiers independently recompute the scope digest;
+- displayed grant/issuer/principal/tenant and machine-identity fields are cross-checked against the canonical scope material;
+- exact effects remain hashes; raw action payloads are not exposed;
+- a validly Ed25519-signed but internally inconsistent scope proof is rejected.
 
-Status: **Open**
+### F3 — Human-review approval was referenced only by digest
 
-`agentshield-scope-v3` correctly binds `grant_id`, issuer, principal, tenant, capabilities and exact-effect digests into `authorization_scope_digest`. The decision event surfaces the scope digest plus selected identity fields.
+Severity: **High**  
+Status: **CLOSED**
 
-However, the portable receipt does not carry the complete canonical scope material needed by an independent verifier to recompute that digest. With only the receipt and audit public key, an outsider can prove that AgentShield signed an event asserting a principal/tenant and a scope digest, but cannot independently prove that those displayed identity values were the exact values committed inside that digest.
+Before remediation, REVIEW execution evidence recorded `review_approval_digest`, but the portable bundle did not carry the original signed approval. An outsider therefore could not independently verify the reviewer signature.
 
-Required remediation direction:
+Remediation:
 
-- define a privacy-safe canonical authorization-scope projection containing only digest-safe authority material;
-- include it in signed decision evidence or as a separately signed receipt proof object;
-- make both runtime and standalone verifiers recompute `authorization_scope_digest` from that material and fail closed on mismatch;
-- add substitution regressions for principal, tenant, capability set, grant id and exact-effect digest set.
+- `ReviewApproval` has an exact portable representation and canonical signed material;
+- portable bundles can carry signed review approvals;
+- review public keys are supplied independently from audit public keys;
+- runtime and standalone verifiers validate the reviewer Ed25519 signature;
+- the approval is cross-checked against the signed REVIEW decision's request, action, payload, scope, tool manifest, policy version and evaluation digest;
+- execution evidence must reference the same approval digest;
+- one admitted grant-consumption event must occur within the approval validity window;
+- missing, extra, duplicate, unknown-key and tampered review proofs fail closed.
 
-Until closed, phrase the claim as signed evidence of AgentShield's authority decision, not as a fully self-contained third-party proof of the underlying authorization scope.
+### F4 — Acting authority did not identify autonomous agent or purpose
 
-### F3 — Human-review approval is referenced by digest but is not portable proof
+Severity: **Medium / product-critical**  
+Status: **CLOSED FOR IMMEDIATE DELEGATION; full portable multi-hop history is a future extension**
 
-Severity: **High**
+The old scope identified issuer/principal/tenant but not the autonomous actor or host-controlled purpose.
 
-Status: **Open**
+Remediation introduces a backward-compatible authority model:
 
-The runtime correctly verifies an Ed25519 `ReviewApproval` bound to request, action, payload, scope, tool manifest, policy version and evaluation digest before executing a REVIEW decision.
+- legacy authority remains `agentshield-scope-v3` and is not silently upgraded;
+- new machine-bound authority uses `agentshield-scope-v4-agent-purpose`;
+- v4 binds `agent_id` and host-controlled `purpose_id`;
+- root v4 authority has no delegator and cannot claim a fake parent;
+- a delegated v4 child must preserve principal, tenant and purpose;
+- the child may change current `agent_id` but must bind both the immediate `delegator_agent_id` and `delegator_grant_id`;
+- capabilities and exact effects still attenuate;
+- in-memory and PostgreSQL authorities enforce the same lineage semantics;
+- signed decision evidence and both receipt verifiers understand v3 and v4;
+- REVIEW receipts verify correctly with v4 scope material.
 
-Execution evidence stores only `review_approval_digest`. The portable evidence bundle does not include the signed `ReviewApproval` object or enough verifier material to independently validate the human approval from the receipt alone.
+Claim boundary: a v4 receipt independently proves the immediate delegation link committed by the child scope. The receipt does not yet reconstruct an arbitrary multi-hop parent scope chain as a separate portable delegation-proof graph.
 
-Required remediation direction:
+### F5 — External anchor publisher did not prove exact statement commitment
 
-- add a receipt proof object for the signed review approval when REVIEW is executed;
-- preserve the review signer key id and exact signed approval material;
-- allow the offline verifier to receive review public-key trust anchors separately and validate the approval signature;
-- cross-check the approval's scope/evaluation/action/payload/tool/policy digests against the signed decision and execution evidence;
-- add missing/wrong-reviewer/wrong-key/replayed-approval/tampered-approval regressions.
+Severity: **Medium**  
+Status: **CLOSED AT SOFTWARE CONTRACT; real provider remains deployment gate**
 
-Until closed, a portable receipt can prove that AgentShield's audit signer recorded a review-approval digest, not independently prove the reviewer signature itself.
+The original publisher contract accepted any non-empty external reference, so AgentShield could not prove that the provider had actually committed the exact anchor statement.
 
-### F4 — Current acting identity does not identify the autonomous agent
+Remediation:
 
-Severity: **Medium / product-critical**
+- `anchor_statement_digest()` computes a canonical SHA-256 commitment over the full statement;
+- the statement binds stream ID, sequence, head-envelope hash, audit key ID and observation time;
+- publishers must return `AnchorPublication` containing both an external reference and the committed statement digest;
+- AgentShield rejects legacy reference-only publishers and digest mismatches;
+- changing the stream identity changes the statement commitment;
+- HMAC chains remain ineligible for independent anchoring claims.
 
-Status: **Open**
+Claim boundary: the interface can verify that a provider reports committing the exact canonical statement. Actual provider immutability, independence, retention and operational availability are properties of the concrete external service and are not established by this repository alone.
 
-The current scope binds issuer, principal and tenant. It does not bind the concrete autonomous actor (`agent_id`) or a host-defined task/purpose identifier.
+### F6 — Export timestamp is outer bundle metadata
 
-This means multiple agents acting for the same principal/tenant are not distinguishable in the authorization scope itself.
+Severity: **Low**  
+Status: **DOCUMENTED BOUNDARY**
 
-Required design work before implementation:
+`exported_at_utc` is bundle/export metadata rather than signed event evidence. It must not be represented as an authenticated event or external-anchor timestamp.
 
-- define whether `agent_id` is immutable or intentionally changes during delegation;
-- define explicit delegation lineage when one agent delegates to another;
-- define host-controlled `purpose_id` semantics and whether purpose is immutable or attenuable;
-- version the scope digest again only after these semantics are frozen;
-- ensure in-memory, PostgreSQL, review, execution and receipt evidence all preserve the model.
+## Positive security properties at current head
 
-Do not add these as cosmetic receipt fields. They must be authority-bound.
+The exact green head now demonstrates:
 
-### F5 — External anchor statement does not cryptographically bind stream identity itself
+- deterministic authorization separated from probabilistic model output;
+- exact-effect authorization;
+- single-use grants and replay resistance;
+- authority-owned security clocks;
+- principal/tenant binding;
+- optional v4 agent/purpose/immediate-parent binding;
+- preserved legacy v3 behavior rather than silent semantic migration;
+- asymmetric Ed25519 human-review authority;
+- signed ALLOW / REVIEW / BLOCK decisions;
+- execution lifecycle evidence with policy version;
+- semantic receipt verification beyond signature validity;
+- independent scope-digest recomputation;
+- portable independently verifiable human-review proofs;
+- durable serialized PostgreSQL evidence streams;
+- public-key-only offline audit verification;
+- exact external-anchor statement commitment contract;
+- explicit refusal to treat local storage as an independent external anchor.
 
-Severity: **Medium**
+## Final forensic verdict for PR #10 code
 
-Status: **Open / deployment-boundary design**
+**PASS FOR INTERNAL CODE / SECURITY-GATE CONVERGENCE. DO NOT MERGE YET.**
 
-`HeadAnchorStatement` contains `stream_id`, sequence, head-envelope hash, audit key id and observed time. The referenced head envelope is Ed25519 signed, but `stream_id` and the complete anchor statement are not themselves signed by the audit key. `publish_head_anchor()` also treats any non-empty publisher reference as a successful durable publication.
+No known F1–F5 technical blocker from this audit remains open at exact head `b045a1ad83e7da09fb7ee5709d39480e756dcedf`.
 
-A real provider adapter may make this trustworthy operationally, but the generic contract alone does not prove that the external reference commits to the exact statement bytes or that the caller-supplied stream label belongs to the signed chain.
+The remaining release blockers are external or repository-owner/admin gates:
 
-Required direction:
+1. independent human/security review of the final diff;
+2. a real independently controlled external anchoring provider and provider-specific operational proof;
+3. production signing-key custody, rotation and authenticated public-key distribution;
+4. protected canonical `main` with required review/status checks;
+5. repository license choice;
+6. controlled convergence through the PR #9 lineage before any merge to `main`;
+7. detector research remains separate and does not justify universal `100%` or `99.999%` prevention claims.
 
-- define provider requirements for immutable statement-byte commitment;
-- consider signing or hashing the canonical anchor statement and requiring the external receipt to bind that digest;
-- define how `stream_id` maps to tenant/agent identity and how a verifier checks that mapping;
-- add provider-conformance tests once a real anchor backend is selected.
-
-The existing code is appropriately honest that no real external anchor is configured; retain that boundary.
-
-### F6 — Export timestamp is bundle metadata, not signed event evidence
-
-Severity: **Low**
-
-Status: **Open / documentation hardening**
-
-`exported_at_utc` is included in the outer evidence bundle and bundle digest, but not in the signed audit events/envelopes. The offline verifier validates the chain without authenticating the export timestamp.
-
-This is acceptable if documented as informational export metadata. It must not be presented as an independently authenticated event time or anchor time.
-
-## Positive findings
-
-The review confirms several strong properties at the audited baseline:
-
-- Ed25519 private-sign/public-verify separation for audit evidence;
-- contiguous zero-based hash-chain verification with first-invalid-record reporting;
-- fail-closed policy decision persistence when an evidence trail is configured;
-- principal/tenant binding inside scope v3 and preservation during delegation;
-- exact-effect authorization and single-use/replay-resistant grants inherited from PR #9;
-- PostgreSQL advisory-lock serialization for one durable multi-worker evidence stream;
-- explicit refusal to claim a fake local store as an external trust anchor;
-- direct policy version on execution evidence through the execution-event builder default after stale-policy rejection;
-- destructive-action BLOCK demonstration that does not execute a real destructive side effect.
-
-## Release verdict
-
-**BLOCK — minor wording changes are not enough.**
-
-F1 is repaired in the branch but must earn a new exact-head green run. F2 and F3 are the principal technical blockers to positioning the current JSON bundle as a self-contained verifiable-authority receipt. F4 is the principal product-identity blocker for a multi-agent gateway. F5 must be addressed when selecting a real external anchoring provider.
-
-Do not merge PR #10 or promote its claim boundary until the new head is green and the open High findings are either fixed or explicitly moved outside the receipt's advertised assurance boundary.
+Keep PR #10 draft and unmerged until those gates are satisfied.

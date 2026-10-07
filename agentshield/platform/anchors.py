@@ -19,7 +19,12 @@ import json
 import re
 from typing import Protocol
 
-from .audit import AuditEnvelope, ED25519_ALGORITHM, envelope_hash
+from .audit import (
+    AUDIT_ENVELOPE_SCHEMA_VERSION,
+    AuditEnvelope,
+    ED25519_ALGORITHM,
+    envelope_hash,
+)
 
 
 ANCHOR_STATEMENT_SCHEMA_VERSION = "agentshield-head-anchor-v1"
@@ -97,6 +102,8 @@ def build_head_anchor_statement(
 ) -> HeadAnchorStatement:
     if type(stream_id) is not str or not stream_id.strip():
         raise ValueError("stream_id must be a non-empty string")
+    if head.schema_version != AUDIT_ENVELOPE_SCHEMA_VERSION:
+        raise ValueError("cannot anchor an unsupported audit envelope schema")
     if head.algorithm != ED25519_ALGORITHM:
         raise ValueError("independent head anchoring requires an Ed25519 audit chain")
     moment = observed_at_utc or datetime.now(timezone.utc)

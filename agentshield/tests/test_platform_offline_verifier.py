@@ -55,6 +55,16 @@ class StandaloneVerifierTests(unittest.TestCase):
         self.assertFalse(result["valid"])
         self.assertEqual(result["verified_records"], 0)
 
+    def test_outsider_rejects_semantically_relabelled_record(self):
+        raw = self.bundle.to_dict()
+        raw["records"][0]["record_type"] = "execution_lifecycle"
+        completed = self._run(raw)
+        self.assertEqual(completed.returncode, 1)
+        result = json.loads(completed.stderr)
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["verified_records"], 0)
+        self.assertEqual(result["reason"], "record_type does not match signed event schema")
+
 
 if __name__ == "__main__":
     unittest.main()

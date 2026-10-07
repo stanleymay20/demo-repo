@@ -163,9 +163,16 @@ def verify_bundle(
     bundle: EvidenceBundle | str | bytes | Mapping[str, Any],
     public_keys: Mapping[str, bytes],
 ) -> ChainVerificationResult:
-    """Verify every event signature and every hash-chain link with public keys only."""
+    """Verify signed events, their semantic record types and every hash-chain link."""
 
     parsed = bundle if isinstance(bundle, EvidenceBundle) else load_bundle(bundle)
+    for index, record in enumerate(parsed.records):
+        if record.record_type != _record_type(record.event):
+            return ChainVerificationResult(
+                AuditVerificationStatus.EVENT_MISMATCH,
+                verified_count=index,
+                first_invalid_index=index,
+            )
     envelopes = tuple(record.envelope for record in parsed.records)
     events = tuple(record.event for record in parsed.records)
     if any(envelope.algorithm != ED25519_ALGORITHM for envelope in envelopes):

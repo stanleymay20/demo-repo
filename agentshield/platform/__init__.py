@@ -1,5 +1,12 @@
 """AgentShield layered agent-security platform primitives."""
 
+from .anchors import (
+    AnchorReceipt,
+    HeadAnchorPublisher,
+    HeadAnchorStatement,
+    build_head_anchor_statement,
+    publish_head_anchor,
+)
 from .audit import (
     AuditEnvelope,
     AuditSigner,
@@ -37,6 +44,7 @@ from .tools import ToolManifest, ToolRegistry, ToolVerificationStatus
 
 __all__ = [
     "ActionRisk",
+    "AnchorReceipt",
     "AuditEnvelope",
     "AuditSigner",
     "AuditTrail",
@@ -54,6 +62,8 @@ __all__ = [
     "EvidenceBundle",
     "EvidenceRecord",
     "ExecutionAuditEvent",
+    "HeadAnchorPublisher",
+    "HeadAnchorStatement",
     "InputProvenance",
     "PolicyInput",
     "PostgresAuditTrail",
@@ -68,6 +78,7 @@ __all__ = [
     "ToolVerificationStatus",
     "TrustLevel",
     "build_bundle",
+    "build_head_anchor_statement",
     "bundle_digest",
     "check_action_scope",
     "check_effect_scope",
@@ -75,6 +86,7 @@ __all__ = [
     "evaluation_digest",
     "load_bundle",
     "pipeline_result_digest",
+    "publish_head_anchor",
     "verify_bundle",
     "verify_chain",
     "verify_in_process_evaluation",

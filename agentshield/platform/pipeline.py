@@ -28,7 +28,13 @@ from .detectors import DetectionResult, Detector
 from .events import AuditEvent, build_audit_event
 from .effects import check_effect_scope, effect_digest_from_payload_digest
 from .grants import GrantAuthorityProtocol, GrantStatus, grant_record_digest
-from .integrity import action_digest, payload_digest, scope_digest, tool_manifest_digest
+from .integrity import (
+    action_digest,
+    payload_digest,
+    scope_digest,
+    scope_material,
+    tool_manifest_digest,
+)
 from .policy import PolicyDecision, PolicyInput, decide
 from .provenance import InputProvenance, TrustLevel
 from .tools import ToolRegistry, ToolVerificationStatus, verify_action_descriptor
@@ -199,10 +205,12 @@ def evaluate_request(
         "effect_status": effect_status.value,
     }
     if authorization_scope is not None:
+        material = scope_material(authorization_scope)
         metadata.update(
             {
                 "authorization_grant_id": authorization_scope.grant_id,
                 "authorization_scope_digest": scope_digest(authorization_scope),
+                "authorization_scope_material": material,
                 "authorization_issuer": authorization_scope.issuer,
                 "authorization_principal": authorization_scope.principal,
                 "authorization_tenant": authorization_scope.tenant,

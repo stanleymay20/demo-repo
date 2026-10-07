@@ -131,7 +131,9 @@ def verify_grant_chain(
         return GrantStatus.MISMATCH
     if chain[-1].parent_grant_id is not None:
         return GrantStatus.ANCESTOR_INVALID
-    if scope.delegator_grant_id != leaf.parent_grant_id:
+    # Legacy v3 child scopes never carried the parent grant id. Machine-bound v4 scopes
+    # do, so only v4 can be independently checked against the durable lineage record here.
+    if scope.machine_identity_bound and scope.delegator_grant_id != leaf.parent_grant_id:
         return GrantStatus.MISMATCH
     for index, record in enumerate(chain):
         if not record.single_use:

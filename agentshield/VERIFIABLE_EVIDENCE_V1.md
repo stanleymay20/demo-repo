@@ -2,10 +2,10 @@
 
 Status: **draft / stacked on the PR #9 remediation branch**. This document describes the current verified code contract, not a production-GA deployment claim.
 
-Verified implementation head before this documentation-only convergence: `b045a1ad83e7da09fb7ee5709d39480e756dcedf`.
+Latest exact code head verified before this documentation-only convergence: `337c26f07298dedd21ab8ff907f9fb2ed780ce6d`.
 
-- AgentShield GA `37661044524`: SUCCESS
-- AgentShield CodeQL `37661044447`: SUCCESS
+- AgentShield GA `37676075777`: SUCCESS
+- AgentShield CodeQL `37676075749`: SUCCESS
 
 ## Goal
 
@@ -35,7 +35,11 @@ Each audit envelope commits:
 - canonical event hash;
 - audit key ID.
 
-The next envelope hashes the complete previous envelope. Full-chain verification checks signatures, event hashes, sequence continuity and previous-hash linkage, and reports the first broken record.
+The next envelope hashes the complete previous envelope. Full-chain verification checks the supported envelope schema, signature algorithm, canonical signature representation, event hashes, sequence continuity and previous-hash linkage, and reports the first broken record.
+
+For Ed25519 evidence, the accepted envelope signature representation is exactly 128 lowercase hexadecimal characters. This is not cosmetic: the envelope hash includes the signature text, so accepting alternate textual encodings of the same Ed25519 bytes would permit multiple accepted head hashes for one cryptographic signature. The standalone verifier also requires the exact envelope field set so unsigned wrapper fields cannot alter an accepted head hash.
+
+Unsupported audit-envelope schema versions fail closed in runtime verification and cannot be passed to the external anchoring boundary.
 
 ## Deterministic authorization evidence
 
@@ -141,6 +145,8 @@ Public keys are deliberately not embedded as trusted roots. Verifiers receive ex
 
 `record_type` is not trusted as free-form wrapper metadata: both verifiers derive the expected type from the signed event schema and reject semantic relabelling.
 
+The current v1 profile understands the policy-decision and execution-event schemas implemented by this branch. A future execution-event schema must not be treated as understood v1 authority semantics merely because it carries a valid audit signature; explicit profile/verifier support and regressions are required when schema versions evolve.
+
 The format is AgentShield-native and designed to map cleanly onto emerging agent-action-receipt work. It does not claim conformance to an adopted final IETF standard.
 
 ## Standalone verification
@@ -164,14 +170,16 @@ python tools/agentshield_verify.py evidence.json \
 
 A successful verification establishes, relative to the supplied trust anchors, that:
 
-1. signed event hashes match;
-2. audit signatures are valid;
-3. chain sequence/order/links are intact;
-4. record semantics match signed event schemas;
-5. authorization-scope commitments are internally reconstructable and consistent;
-6. v4 machine/purpose/immediate-parent identity metadata agrees with the committed scope;
-7. any reviewed execution has a separately valid reviewer signature and matching authority/evaluation bindings;
-8. the chain head can be independently recomputed.
+1. the envelope schema and algorithm are supported;
+2. the envelope field set and Ed25519 signature encoding are canonical;
+3. signed event hashes match;
+4. audit signatures are valid;
+5. chain sequence/order/links are intact;
+6. record semantics match signed event schemas;
+7. authorization-scope commitments are internally reconstructable and consistent;
+8. v4 machine/purpose/immediate-parent identity metadata agrees with the committed scope;
+9. any reviewed execution has a separately valid reviewer signature and matching authority/evaluation bindings;
+10. the chain head can be independently and stably recomputed.
 
 It does not prove that signing services were uncompromised or that the public-key distribution channel itself was trustworthy.
 
@@ -190,6 +198,8 @@ It does not prove that signing services were uncompromised or that the public-ke
 Integration tests exercise concurrent workers and verify one contiguous chain.
 
 `PostgresGrantAuthority` provides atomic single-use grant lifecycle and delegation with database-owned time and root-to-leaf locking. It enforces the same v3/v4 identity and delegation rules as the in-memory authority.
+
+The advisory-lock namespace uses PostgreSQL hash functions. A hash collision can over-serialize unrelated streams, which is an availability/performance concern, but it does not let writers bypass the serialization boundary.
 
 ## External anchoring contract
 
@@ -213,7 +223,8 @@ AgentShield rejects:
 
 - legacy reference-only publisher results;
 - a provider-reported digest that differs from the locally recomputed canonical statement digest;
-- HMAC chains presented as independently anchorable evidence.
+- HMAC chains presented as independently anchorable evidence;
+- unsupported audit-envelope schemas presented for external anchoring.
 
 Changing stream identity changes the anchor statement commitment.
 
@@ -227,11 +238,11 @@ Changing stream identity changes the anchor statement commitment.
 
 `examples/agentshield_verifiable_block_demo.py` demonstrates a destructive-action proposal against a production-like resource being BLOCKed and exported as signed evidence. It does not connect to or delete from a real production database.
 
-The test suite also verifies receipt semantics, scope reconstruction, v4 agent/purpose binding, PostgreSQL delegation behavior, review proof portability, and separate-process verification.
+The test suite also verifies receipt semantics, scope reconstruction, v4 agent/purpose binding, PostgreSQL delegation behavior, review proof portability, supported envelope-schema enforcement, canonical head-envelope representation, and separate-process verification.
 
 ## Remaining gates before external GA
 
-The internal F1–F5 forensic findings are closed at the verified code head. The remaining release gates are deliberately outside the current code-only claim:
+The internal forensic findings are closed at the latest verified code head. The remaining release gates are deliberately outside the current code-only claim:
 
 1. independent human/security review of the final diff;
 2. a real independently controlled external anchoring provider with operational evidence;
@@ -241,11 +252,13 @@ The internal F1–F5 forensic findings are closed at the verified code head. The
 6. controlled convergence through the PR #9 lineage before any merge to `main`;
 7. detector research remains separate and cannot justify universal `100%` or `99.999%` prevention claims.
 
+Repository checks during the forensic pass confirmed that `main` is currently unprotected, no repository ruleset is configured, no license is configured, and neither PR #9 nor PR #10 currently has a submitted human review.
+
 ## Safe claim boundary
 
 At the verified internal code head it is reasonable to say:
 
-> AgentShield has a draft deterministic authorization and Ed25519 evidence layer that records ALLOW, REVIEW and BLOCK decisions, independently reconstructs canonical authorization-scope commitments, supports agent/purpose-bound immediate delegation, independently verifies reviewed executions with separate human-review trust anchors, persists one serialized PostgreSQL evidence stream, exports portable hash-chained evidence, and requires external anchor providers to commit the exact canonical chain-head statement.
+> AgentShield has a draft deterministic authorization and Ed25519 evidence layer that records ALLOW, REVIEW and BLOCK decisions, independently reconstructs canonical authorization-scope commitments, supports agent/purpose-bound immediate delegation, independently verifies reviewed executions with separate human-review trust anchors, persists one serialized PostgreSQL evidence stream, exports canonical portable hash-chained evidence with a stable independently recomputable head, and requires external anchor providers to commit the exact canonical chain-head statement.
 
 Do not yet say:
 

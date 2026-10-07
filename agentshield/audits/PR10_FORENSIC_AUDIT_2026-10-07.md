@@ -6,7 +6,7 @@ PR: #10 `AgentShield: verifiable evidence layer v1`
 
 Initial forensic baseline: `55a14ed157600b1de31a0def2a930496e36abcea`
 
-Current exact remediation head: `b045a1ad83e7da09fb7ee5709d39480e756dcedf`
+Latest exact code head verified before this documentation convergence: `337c26f07298dedd21ab8ff907f9fb2ed780ce6d`
 
 Status: **INTERNAL CODE GATES PASS — KEEP DRAFT / DO NOT MERGE YET**
 
@@ -14,15 +14,17 @@ This audit reviewed and repaired the authority/evidence path without weakening s
 
 ## Exact-head verification
 
-At `b045a1ad83e7da09fb7ee5709d39480e756dcedf`:
+At `337c26f07298dedd21ab8ff907f9fb2ed780ce6d`:
 
-- AgentShield GA run `37661044524`: **SUCCESS**
-- AgentShield CodeQL run `37661044447`: **SUCCESS**
+- AgentShield GA run `37676075777`: **SUCCESS**
+- AgentShield CodeQL run `37676075749`: **SUCCESS**
 
 Earlier milestone heads also earned exact-head green evidence:
 
 - F1/F2 remediation head `78e72cafc34ff980fa72eac1e27a80a33fa7697b`: GA `37657250761` SUCCESS; CodeQL `37657250638` SUCCESS.
 - F3 portable-review head `b570f732c62d883346524c8c06ab7a5e21833f63`: GA `37658292575` SUCCESS; CodeQL `37658292635` SUCCESS.
+- F4/F5 implementation head `b045a1ad83e7da09fb7ee5709d39480e756dcedf`: GA `37661044524` SUCCESS; CodeQL `37661044447` SUCCESS.
+- Documentation-converged head `8d4a26e249cbd056679b2d09d6e31b8da789f631`: GA `37661600603` SUCCESS; CodeQL `37661600517` SUCCESS.
 
 ## Findings and disposition
 
@@ -120,9 +122,45 @@ Status: **DOCUMENTED BOUNDARY**
 
 `exported_at_utc` is bundle/export metadata rather than signed event evidence. It must not be represented as an authenticated event or external-anchor timestamp.
 
+### F7 — Runtime and anchor boundaries accepted unsupported audit-envelope schema versions
+
+Severity: **Medium / protocol-integrity**  
+Status: **CLOSED**
+
+The standalone verifier rejected unsupported audit-envelope schema versions, but the in-process HMAC/Ed25519 verifiers authenticated whatever `schema_version` was included in otherwise valid signed material. The external anchor builder also checked Ed25519 algorithm but did not reject an unsupported envelope schema before publication.
+
+This was not a signature-forgery path, but it created inconsistent protocol-version semantics between runtime, portable verification and anchoring.
+
+Remediation:
+
+- runtime audit verification now fails closed with `SCHEMA_MISMATCH` unless the envelope schema exactly matches the supported version;
+- HMAC and Ed25519 regressions cover unsupported schemas;
+- the anchor boundary rejects unsupported audit-envelope schemas before invoking the external publisher;
+- standalone verification already enforced the supported envelope schema.
+
+### F8 — Accepted Ed25519 signature text could make the chain-head hash malleable
+
+Severity: **High for evidence-head canonicalization**  
+Status: **CLOSED**
+
+Python's `bytes.fromhex()` accepts alternate textual encodings such as embedded whitespace. Ed25519 verifies signature bytes, while AgentShield's `envelope_hash` commits the signature string itself. On the final envelope, an equivalent signature-byte representation could therefore verify while producing a different accepted head hash. The standalone verifier also previously tolerated unsigned extra envelope fields while its computed head hash included them.
+
+That is especially dangerous at the external-anchoring boundary, where the head hash is the object being committed.
+
+Remediation:
+
+- runtime Ed25519 verification requires the signer-produced canonical representation: exactly 128 lowercase hexadecimal characters;
+- the standalone verifier enforces the same canonical Ed25519 representation;
+- the standalone verifier requires the exact audit-envelope field set, rejecting unsigned extra envelope fields;
+- one-record-head regressions prove that whitespace-reencoded signatures and extra wrapper fields are rejected rather than producing alternate accepted head hashes.
+
+### Protocol-version boundary — future execution-event schemas
+
+The v1 receipt profile recognizes the current policy-decision and execution-event schemas used by this branch. Unknown future execution schemas must not be advertised as understood v1 semantics merely because an audit signature is valid. Future schema support requires an explicit verifier/profile revision and corresponding tests; generic signed audit evidence does not automatically acquire execution-authority meaning.
+
 ## Positive security properties at current head
 
-The exact green head now demonstrates:
+The exact green code head now demonstrates:
 
 - deterministic authorization separated from probabilistic model output;
 - exact-effect authorization;
@@ -139,14 +177,17 @@ The exact green head now demonstrates:
 - portable independently verifiable human-review proofs;
 - durable serialized PostgreSQL evidence streams;
 - public-key-only offline audit verification;
+- fail-closed supported audit-envelope schema handling;
+- canonical Ed25519 envelope encoding with stable accepted head hashes;
 - exact external-anchor statement commitment contract;
+- refusal to anchor unsupported audit-envelope schemas;
 - explicit refusal to treat local storage as an independent external anchor.
 
 ## Final forensic verdict for PR #10 code
 
 **PASS FOR INTERNAL CODE / SECURITY-GATE CONVERGENCE. DO NOT MERGE YET.**
 
-No known F1–F5 technical blocker from this audit remains open at exact head `b045a1ad83e7da09fb7ee5709d39480e756dcedf`.
+No known F1–F5, F7 or F8 technical blocker from this audit remains open at exact code head `337c26f07298dedd21ab8ff907f9fb2ed780ce6d`. F6 remains an explicit metadata boundary.
 
 The remaining release blockers are external or repository-owner/admin gates:
 
@@ -157,5 +198,7 @@ The remaining release blockers are external or repository-owner/admin gates:
 5. repository license choice;
 6. controlled convergence through the PR #9 lineage before any merge to `main`;
 7. detector research remains separate and does not justify universal `100%` or `99.999%` prevention claims.
+
+Repository evidence checked during this pass confirms that `main` is currently unprotected, no repository ruleset is configured, no license is configured, and neither PR #9 nor PR #10 currently has a submitted human review. Those gates therefore remain genuinely open.
 
 Keep PR #10 draft and unmerged until those gates are satisfied.

@@ -30,7 +30,9 @@ SCOPE_KEYS_V3 = {
     "scope_schema", "grant_id", "issuer", "principal", "tenant",
     "allowed_capabilities", "allowed_effects",
 }
-SCOPE_KEYS_V4 = SCOPE_KEYS_V3 | {"agent_id", "purpose_id", "delegator_agent_id"}
+SCOPE_KEYS_V4 = SCOPE_KEYS_V3 | {
+    "agent_id", "purpose_id", "delegator_agent_id", "delegator_grant_id",
+}
 REVIEW_KEYS = {
     "review_schema", "evaluation_digest", "approval_id", "request_id",
     "action_digest", "payload_digest", "scope_digest", "tool_manifest_digest",
@@ -101,7 +103,11 @@ def valid_scope_material(value):
             item = value.get(field)
             if type(item) is not str or not item.strip() or item != item.strip():
                 return False
-        if not valid_optional_identity(value.get("delegator_agent_id")):
+        delegator_agent = value.get("delegator_agent_id")
+        delegator_grant = value.get("delegator_grant_id")
+        if not valid_optional_identity(delegator_agent) or not valid_optional_identity(delegator_grant):
+            return False
+        if (delegator_agent is None) != (delegator_grant is None):
             return False
     caps = value.get("allowed_capabilities")
     if type(caps) is not list or any(type(item) is not str for item in caps):
@@ -134,6 +140,7 @@ def scope_evidence_error(event):
         "authorization_agent_id": material.get("agent_id"),
         "authorization_purpose_id": material.get("purpose_id"),
         "authorization_delegator_agent_id": material.get("delegator_agent_id"),
+        "authorization_delegator_grant_id": material.get("delegator_grant_id"),
     }
     if any(metadata.get(field) != value for field, value in expected.items()):
         return "displayed authorization identity does not match canonical scope material"

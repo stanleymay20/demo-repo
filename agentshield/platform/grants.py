@@ -131,6 +131,8 @@ def verify_grant_chain(
         return GrantStatus.MISMATCH
     if chain[-1].parent_grant_id is not None:
         return GrantStatus.ANCESTOR_INVALID
+    if scope.delegator_grant_id != leaf.parent_grant_id:
+        return GrantStatus.MISMATCH
     for index, record in enumerate(chain):
         if not record.single_use:
             status = GrantStatus.REUSABLE_UNSUPPORTED
@@ -164,7 +166,7 @@ def delegated_record(
 
     Legacy v3 authority stays legacy during delegation. A machine-bound v4 parent may
     delegate to another agent, but the child must preserve principal, tenant and purpose,
-    and must commit the parent's ``agent_id`` as its immediate ``delegator_agent_id``.
+    and must commit the parent's agent id and grant id as the immediate delegation link.
     """
     if verify_grant_chain(parent_scope, chain, now) is not GrantStatus.VALID:
         raise ValueError("parent grant is not valid for delegation")
@@ -187,9 +189,10 @@ def delegated_record(
             not child_scope.machine_identity_bound
             or child_scope.purpose_id != parent_scope.purpose_id
             or child_scope.delegator_agent_id != parent_scope.agent_id
+            or child_scope.delegator_grant_id != parent_scope.grant_id
         ):
             raise ValueError(
-                "machine-bound child must preserve purpose and name the parent agent as delegator"
+                "machine-bound child must preserve purpose and bind the parent agent and grant"
             )
     elif child_scope.machine_identity_bound:
         raise ValueError("legacy authority cannot acquire machine identity during delegation")
@@ -231,6 +234,8 @@ class GrantAuthority:
     ) -> GrantRecord:
         if ttl <= timedelta(0):
             raise ValueError("grant ttl must be positive")
+        if scope.delegator_agent_id is not None or scope.delegator_grant_id is not None:
+            raise ValueError("directly issued root authority cannot claim a delegator")
         with self._lock:
             if scope.grant_id in self._records:
                 raise ValueError("grant_id already exists")

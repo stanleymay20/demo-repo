@@ -23,6 +23,7 @@ from typing import Any, Callable, Mapping, Sequence
 AUDIT_ENVELOPE_SCHEMA_VERSION = "agentshield-audit-envelope-v2"
 HMAC_ALGORITHM = "hmac-sha256"
 ED25519_ALGORITHM = "ed25519"
+_HEX = frozenset("0123456789abcdef")
 
 
 class AuditVerificationStatus(str, Enum):
@@ -113,6 +114,10 @@ def _signature_material(
         "event_hash": event_hash_value,
         "key_id": key_id,
     }
+
+
+def _canonical_ed25519_signature(value: Any) -> bool:
+    return type(value) is str and len(value) == 128 and all(char in _HEX for char in value)
 
 
 def _cryptography():
@@ -304,6 +309,8 @@ class Ed25519AuditVerifier:
             return AuditVerificationStatus.SCHEMA_MISMATCH
         if envelope.algorithm != ED25519_ALGORITHM:
             return AuditVerificationStatus.ALGORITHM_MISMATCH
+        if not _canonical_ed25519_signature(envelope.signature):
+            return AuditVerificationStatus.INVALID_SIGNATURE
         key = self._keys.get(envelope.key_id)
         if key is None:
             return AuditVerificationStatus.UNKNOWN_KEY

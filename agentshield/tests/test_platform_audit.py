@@ -143,6 +143,18 @@ class PublicAuditEvidenceTests(unittest.TestCase):
             AuditVerificationStatus.SCHEMA_MISMATCH,
         )
 
+    def test_public_verifier_rejects_noncanonical_signature_hex(self):
+        event = {"request_id": "r1", "decision": "block"}
+        envelope = self.signer.seal(event, sequence=0)
+        noncanonical = replace(
+            envelope,
+            signature=envelope.signature[:64] + " " + envelope.signature[64:],
+        )
+        self.assertIs(
+            self.verifier.verify(noncanonical, event),
+            AuditVerificationStatus.INVALID_SIGNATURE,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -23,6 +24,13 @@ class StandaloneVerifierTests(unittest.TestCase):
         self.bundle = build_bundle(trail.envelopes, trail.events)
         self.script = Path("tools/agentshield_verify.py")
 
+    @staticmethod
+    def _digest(value):
+        encoded = json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
     def _run(self, raw):
         with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
             json.dump(raw, handle)
@@ -37,6 +45,39 @@ class StandaloneVerifierTests(unittest.TestCase):
             )
         finally:
             Path(path).unlink(missing_ok=True)
+
+    def _v4_bundle(self, *, displayed_purpose="case-8842"):
+        material = {
+            "scope_schema": "agentshield-scope-v4-agent-purpose",
+            "grant_id": "g-v4",
+            "issuer": "policy-service",
+            "principal": "employee-42",
+            "tenant": "company-7",
+            "allowed_capabilities": ["read_data"],
+            "allowed_effects": ["a" * 64],
+            "agent_id": "records-agent-9",
+            "purpose_id": "case-8842",
+            "delegator_agent_id": "orchestrator-agent",
+        }
+        trail = AuditTrail(self.signer)
+        trail.append({
+            "event_schema_version": "agentshield-audit-event-v1",
+            "request_id": "scope-v4-proof",
+            "decision": "allow",
+            "policy_version": "agentshield-policy-v7",
+            "metadata": {
+                "authorization_grant_id": "g-v4",
+                "authorization_issuer": "policy-service",
+                "authorization_principal": "employee-42",
+                "authorization_tenant": "company-7",
+                "authorization_agent_id": "records-agent-9",
+                "authorization_purpose_id": displayed_purpose,
+                "authorization_delegator_agent_id": "orchestrator-agent",
+                "authorization_scope_material": material,
+                "authorization_scope_digest": self._digest(material),
+            },
+        })
+        return build_bundle(trail.envelopes, trail.events)
 
     def test_outsider_can_verify_block_bundle_without_agentshield_keys_or_service(self):
         completed = self._run(self.bundle.to_dict())
@@ -98,6 +139,26 @@ class StandaloneVerifierTests(unittest.TestCase):
         self.assertEqual(
             result["reason"],
             "authorization scope digest does not match canonical scope material",
+        )
+
+    def test_outsider_verifies_agent_and_purpose_bound_scope_v4(self):
+        completed = self._run(self._v4_bundle().to_dict())
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["verified_records"], 1)
+
+    def test_outsider_rejects_signed_v4_display_identity_mismatch(self):
+        # The event itself is freshly and validly Ed25519-signed. Verification must still
+        # reject a displayed purpose that disagrees with the canonical authority material.
+        completed = self._run(self._v4_bundle(displayed_purpose="other-purpose").to_dict())
+        self.assertEqual(completed.returncode, 1)
+        result = json.loads(completed.stderr)
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["verified_records"], 0)
+        self.assertEqual(
+            result["reason"],
+            "displayed authorization identity does not match canonical scope material",
         )
 
 

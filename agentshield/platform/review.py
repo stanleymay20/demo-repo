@@ -20,6 +20,17 @@ from typing import Any, Callable, Mapping
 
 
 REVIEW_SCHEMA_VERSION = "agentshield-review-v3-ed25519"
+_HEX = frozenset("0123456789abcdef")
+
+
+def canonical_review_signature(value: Any) -> bool:
+    """Accept only the signer-produced encoding: 128 lowercase hex characters.
+
+    ``review_approval_digest`` commits the signature text. Accepting alternate encodings
+    of the same Ed25519 bytes (uppercase, embedded whitespace) would let one signed
+    approval carry several accepted digests in execution evidence.
+    """
+    return type(value) is str and len(value) == 128 and all(char in _HEX for char in value)
 
 
 class ReviewStatus(str, Enum):
@@ -127,7 +138,7 @@ def load_review_approval(value: Mapping[str, Any]) -> ReviewApproval:
     except (TypeError, ValueError) as exc:
         raise ValueError("review approval timestamps are invalid") from exc
     try:
-        return ReviewApproval(
+        approval = ReviewApproval(
             approval_id=value["approval_id"],
             request_id=value["request_id"],
             action_digest=value["action_digest"],
@@ -144,6 +155,13 @@ def load_review_approval(value: Mapping[str, Any]) -> ReviewApproval:
         )
     except (AttributeError, TypeError, ValueError) as exc:
         raise ValueError("review approval proof fields are invalid") from exc
+    # The portable proof must be byte-for-byte the canonical signed representation.
+    # Otherwise a relayer can re-encode timestamps (or the signature) so the accepted
+    # proof differs from the exact bytes the reviewer signed, and independent verifiers
+    # that hash the literal proof disagree with ones that normalize it first.
+    if not canonical_review_signature(approval.signature) or approval.to_dict() != value:
+        raise ValueError("review approval proof is not in canonical signed form")
+    return approval
 
 
 def _cryptography():
@@ -261,10 +279,9 @@ class ReviewVerifier:
         key = self._keys.get(approval.key_id)
         if key is None:
             return ReviewStatus.UNKNOWN_KEY
-        try:
-            signature = bytes.fromhex(approval.signature)
-        except (TypeError, ValueError):
+        if not canonical_review_signature(approval.signature):
             return ReviewStatus.INVALID_SIGNATURE
+        signature = bytes.fromhex(approval.signature)
         InvalidSignature, _, _, _ = _cryptography()
         try:
             key.verify(signature, _canonical_bytes(review_approval_material(approval)))

@@ -60,6 +60,37 @@ class ReceiptBundleTests(unittest.TestCase):
         self.assertEqual(result.first_invalid_index, 1)
         self.assertEqual(result.verified_count, 1)
 
+    def test_bundle_rejects_signed_inconsistent_authorization_scope_proof(self):
+        trail = AuditTrail(self.signer)
+        material = {
+            "scope_schema": "agentshield-scope-v3",
+            "grant_id": "g1",
+            "issuer": "policy-service",
+            "principal": "employee-42",
+            "tenant": "company-7",
+            "allowed_capabilities": ["read_data"],
+            "allowed_effects": ["a" * 64],
+        }
+        trail.append({
+            "event_schema_version": "agentshield-audit-event-v1",
+            "request_id": "scope-proof",
+            "decision": "allow",
+            "policy_version": "agentshield-policy-v7",
+            "metadata": {
+                "authorization_grant_id": "g1",
+                "authorization_issuer": "policy-service",
+                "authorization_principal": "employee-42",
+                "authorization_tenant": "company-7",
+                "authorization_scope_material": material,
+                "authorization_scope_digest": "0" * 64,
+            },
+        })
+        bundle = build_bundle(trail.envelopes, trail.events)
+        result = verify_bundle(bundle, self.public_keys)
+        self.assertIs(result.status, AuditVerificationStatus.EVENT_MISMATCH)
+        self.assertEqual(result.first_invalid_index, 0)
+        self.assertEqual(result.verified_count, 0)
+
     def test_bundle_rejects_hmac_as_independent_evidence(self):
         from agentshield.platform.audit import AuditSigner
 

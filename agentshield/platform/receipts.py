@@ -1,16 +1,17 @@
 """Portable AgentShield evidence bundles for independent offline verification.
 
-A bundle contains the exact signed audit events and envelopes, not raw prompts, payloads
-or outputs. Public keys are deliberately *not* embedded as trust anchors: an auditor must
-obtain the expected Ed25519 public key through an independent channel.
+A bundle contains exact signed audit events/envelopes and, when a REVIEW action executes,
+the separately signed human-review approval needed to prove that authorization offline.
+Raw prompts, payloads and tool outputs are not exported. Public keys are deliberately not
+embedded as trust anchors: auditors obtain audit and review keys independently.
 
-The v1 format is an AgentShield-native receipt profile designed to map cleanly onto
-emerging agent-action receipt work. It does not claim conformance to a final IETF standard.
+The v1 format is an AgentShield-native draft designed to map cleanly onto emerging signed
+agent-action receipt work. It does not claim conformance to a final IETF standard.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -23,6 +24,14 @@ from .audit import (
     ED25519_ALGORITHM,
     Ed25519AuditVerifier,
     verify_chain,
+)
+from .events import AuditEvent, evaluation_digest
+from .review import (
+    ReviewApproval,
+    ReviewStatus,
+    ReviewVerifier,
+    load_review_approval,
+    review_approval_digest,
 )
 
 
@@ -61,6 +70,7 @@ class EvidenceBundle:
     receipt_profile: str
     exported_at_utc: str
     records: tuple[EvidenceRecord, ...]
+    review_approvals: tuple[Mapping[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +78,7 @@ class EvidenceBundle:
             "receipt_profile": self.receipt_profile,
             "exported_at_utc": self.exported_at_utc,
             "records": [record.to_dict() for record in self.records],
+            "review_approvals": [dict(approval) for approval in self.review_approvals],
         }
 
     def to_json(self, *, indent: int | None = 2) -> str:
@@ -93,8 +104,6 @@ def _event_mapping(event: Any) -> dict[str, Any]:
         value = dict(event)
     else:
         raise TypeError("receipt event must be a mapping or expose to_dict()")
-    # Round-trip through JSON to detach custom Mapping/list subclasses and prove that the
-    # portable representation contains JSON values only.
     try:
         return json.loads(json.dumps(value, allow_nan=False, ensure_ascii=False))
     except (TypeError, ValueError, UnicodeError) as exc:
@@ -162,10 +171,29 @@ def _scope_evidence_valid(event: Mapping[str, Any]) -> bool:
     return all(metadata.get(field) == value for field, value in expected_metadata.items())
 
 
+def _decision_digest(event: Mapping[str, Any]) -> str | None:
+    try:
+        return evaluation_digest(AuditEvent(**dict(event)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_event_time(event: Mapping[str, Any]) -> datetime | None:
+    value = event.get("timestamp_utc")
+    if type(value) is not str:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return None if moment.tzinfo is None else moment.astimezone(timezone.utc)
+
+
 def build_bundle(
     envelopes: Sequence[AuditEnvelope],
     events: Sequence[Any],
     *,
+    review_approvals: Sequence[ReviewApproval] = (),
     exported_at_utc: datetime | None = None,
 ) -> EvidenceBundle:
     """Create a portable bundle from a complete Ed25519 audit chain."""
@@ -180,6 +208,11 @@ def build_bundle(
             raise ValueError("independent evidence bundles require Ed25519 audit envelopes")
         mapped = _event_mapping(event)
         records.append(EvidenceRecord(_record_type(mapped), mapped, envelope))
+    proofs: list[dict[str, Any]] = []
+    for approval in review_approvals:
+        if type(approval) is not ReviewApproval:
+            raise TypeError("review_approvals must contain exact ReviewApproval records")
+        proofs.append(approval.to_dict())
     moment = exported_at_utc or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         raise ValueError("exported_at_utc must be timezone-aware")
@@ -188,6 +221,7 @@ def build_bundle(
         receipt_profile=RECEIPT_PROFILE,
         exported_at_utc=moment.astimezone(timezone.utc).isoformat(),
         records=tuple(records),
+        review_approvals=tuple(proofs),
     )
 
 
@@ -224,19 +258,172 @@ def load_bundle(value: str | bytes | Mapping[str, Any]) -> EvidenceBundle:
         if type(event) is not dict or type(envelope) is not dict:
             raise ValueError("bundle record requires event and envelope objects")
         records.append(EvidenceRecord(record_type, event, AuditEnvelope(**envelope)))
+    approvals_raw = raw.get("review_approvals", [])
+    if type(approvals_raw) is not list or any(type(item) is not dict for item in approvals_raw):
+        raise ValueError("review_approvals must be a list of objects")
     return EvidenceBundle(
         schema_version=BUNDLE_SCHEMA_VERSION,
         receipt_profile=RECEIPT_PROFILE,
         exported_at_utc=exported,
         records=tuple(records),
+        review_approvals=tuple(dict(item) for item in approvals_raw),
     )
+
+
+def _verify_review_proofs(
+    bundle: EvidenceBundle,
+    review_public_keys: Mapping[str, bytes] | None,
+) -> ChainVerificationResult | None:
+    execution_refs: dict[str, list[tuple[int, Mapping[str, Any]]]] = {}
+    for index, record in enumerate(bundle.records):
+        if record.record_type != "execution_lifecycle":
+            continue
+        event = record.event
+        digest = event.get("review_approval_digest")
+        decision = event.get("decision")
+        if decision == "review" and not _valid_hex_digest(digest):
+            return ChainVerificationResult(
+                AuditVerificationStatus.EVENT_MISMATCH, index, index,
+            )
+        if digest is not None:
+            if decision != "review" or not _valid_hex_digest(digest):
+                return ChainVerificationResult(
+                    AuditVerificationStatus.EVENT_MISMATCH, index, index,
+                )
+            execution_refs.setdefault(digest, []).append((index, event))
+
+    if not execution_refs:
+        if bundle.review_approvals:
+            return ChainVerificationResult(
+                AuditVerificationStatus.EVENT_MISMATCH,
+                verified_count=len(bundle.records),
+                first_invalid_index=len(bundle.records),
+            )
+        return None
+
+    if not review_public_keys:
+        first_index = min(index for refs in execution_refs.values() for index, _ in refs)
+        return ChainVerificationResult(
+            AuditVerificationStatus.UNKNOWN_KEY, first_index, first_index,
+        )
+    try:
+        verifier = ReviewVerifier(review_public_keys)
+    except (TypeError, ValueError):
+        first_index = min(index for refs in execution_refs.values() for index, _ in refs)
+        return ChainVerificationResult(
+            AuditVerificationStatus.UNKNOWN_KEY, first_index, first_index,
+        )
+
+    proofs: dict[str, ReviewApproval] = {}
+    for raw in bundle.review_approvals:
+        try:
+            approval = load_review_approval(raw)
+        except ValueError:
+            return ChainVerificationResult(
+                AuditVerificationStatus.EVENT_MISMATCH,
+                verified_count=len(bundle.records),
+                first_invalid_index=len(bundle.records),
+            )
+        digest = review_approval_digest(approval)
+        if digest in proofs:
+            return ChainVerificationResult(
+                AuditVerificationStatus.EVENT_MISMATCH,
+                verified_count=len(bundle.records),
+                first_invalid_index=len(bundle.records),
+            )
+        signature_status = verifier.verify_signature(approval)
+        if signature_status is ReviewStatus.UNKNOWN_KEY:
+            refs = execution_refs.get(digest, ())
+            index = refs[0][0] if refs else len(bundle.records)
+            return ChainVerificationResult(AuditVerificationStatus.UNKNOWN_KEY, index, index)
+        if signature_status is not ReviewStatus.VALID:
+            refs = execution_refs.get(digest, ())
+            index = refs[0][0] if refs else len(bundle.records)
+            return ChainVerificationResult(AuditVerificationStatus.INVALID_SIGNATURE, index, index)
+        proofs[digest] = approval
+
+    if set(proofs) != set(execution_refs):
+        missing = set(execution_refs) - set(proofs)
+        if missing:
+            index = min(execution_refs[digest][0][0] for digest in missing)
+            return ChainVerificationResult(AuditVerificationStatus.EVENT_MISMATCH, index, index)
+        return ChainVerificationResult(
+            AuditVerificationStatus.EVENT_MISMATCH,
+            verified_count=len(bundle.records),
+            first_invalid_index=len(bundle.records),
+        )
+
+    decision_records: list[tuple[int, Mapping[str, Any], str]] = []
+    for index, record in enumerate(bundle.records):
+        if record.record_type != "policy_decision":
+            continue
+        digest = _decision_digest(record.event)
+        if digest is not None:
+            decision_records.append((index, record.event, digest))
+
+    for digest, refs in execution_refs.items():
+        approval = proofs[digest]
+        matching = [
+            (index, event)
+            for index, event, eval_digest in decision_records
+            if event.get("request_id") == approval.request_id
+            and event.get("decision") == "review"
+            and eval_digest == approval.evaluation_digest
+        ]
+        if len(matching) != 1:
+            index = refs[0][0]
+            return ChainVerificationResult(AuditVerificationStatus.EVENT_MISMATCH, index, index)
+        _, decision_event = matching[0]
+        metadata = decision_event.get("metadata")
+        if type(metadata) is not dict:
+            index = refs[0][0]
+            return ChainVerificationResult(AuditVerificationStatus.EVENT_MISMATCH, index, index)
+        expected = (
+            metadata.get("action_digest"),
+            metadata.get("payload_digest"),
+            metadata.get("authorization_scope_digest"),
+            metadata.get("tool_manifest_digest"),
+            decision_event.get("policy_version"),
+        )
+        observed = (
+            approval.action_digest,
+            approval.payload_digest,
+            approval.scope_digest,
+            approval.tool_manifest_digest,
+            approval.policy_version,
+        )
+        if observed != expected:
+            index = refs[0][0]
+            return ChainVerificationResult(AuditVerificationStatus.EVENT_MISMATCH, index, index)
+
+        consumed_times: list[datetime] = []
+        for index, event in refs:
+            if (
+                event.get("request_id") != approval.request_id
+                or event.get("evaluation_digest") != approval.evaluation_digest
+                or event.get("policy_version") != approval.policy_version
+            ):
+                return ChainVerificationResult(AuditVerificationStatus.EVENT_MISMATCH, index, index)
+            if event.get("phase") == "grant_consumed" and event.get("status") == "admitted":
+                moment = _parse_event_time(event)
+                if moment is None:
+                    return ChainVerificationResult(AuditVerificationStatus.EVENT_MISMATCH, index, index)
+                consumed_times.append(moment)
+        if len(consumed_times) != 1 or not (
+            approval.issued_at_utc <= consumed_times[0] < approval.expires_at_utc
+        ):
+            index = refs[0][0]
+            return ChainVerificationResult(AuditVerificationStatus.EVENT_MISMATCH, index, index)
+    return None
 
 
 def verify_bundle(
     bundle: EvidenceBundle | str | bytes | Mapping[str, Any],
     public_keys: Mapping[str, bytes],
+    *,
+    review_public_keys: Mapping[str, bytes] | None = None,
 ) -> ChainVerificationResult:
-    """Verify signed events, authority commitments, semantics and hash-chain links."""
+    """Verify audit evidence, scope commitments and any human-review authorization proof."""
 
     parsed = bundle if isinstance(bundle, EvidenceBundle) else load_bundle(bundle)
     for index, record in enumerate(parsed.records):
@@ -260,7 +447,11 @@ def verify_bundle(
             verified_count=0,
             first_invalid_index=0,
         )
-    return verify_chain(Ed25519AuditVerifier(public_keys), envelopes, events)
+    chain_result = verify_chain(Ed25519AuditVerifier(public_keys), envelopes, events)
+    if not chain_result.valid:
+        return chain_result
+    review_result = _verify_review_proofs(parsed, review_public_keys)
+    return chain_result if review_result is None else review_result
 
 
 def bundle_digest(bundle: EvidenceBundle | str | bytes | Mapping[str, Any]) -> str:

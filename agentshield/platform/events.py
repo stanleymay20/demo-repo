@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from .policy import ActionRisk, ContentRisk, PolicyDecision
+from .policy import ActionRisk, ContentRisk, POLICY_VERSION, PolicyDecision
 
 EVENT_SCHEMA_VERSION = "agentshield-audit-event-v1"
 EXECUTION_EVENT_SCHEMA_VERSION = "agentshield-execution-audit-event-v2"
@@ -46,7 +46,7 @@ class ExecutionAuditEvent:
     status: str
     grant_id: str
     effect_digest: str
-    policy_version: str | None = None
+    policy_version: str = POLICY_VERSION
     grant_record_digest: str | None = None
     review_approval_digest: str | None = None
     exception_class: str | None = None
@@ -103,7 +103,7 @@ def build_execution_audit_event(
     status: str,
     grant_id: str,
     effect_digest: str,
-    policy_version: str | None = None,
+    policy_version: str = POLICY_VERSION,
     grant_record_digest: str | None = None,
     review_approval_digest: str | None = None,
     exception_class: str | None = None,
@@ -114,11 +114,10 @@ def build_execution_audit_event(
         (request_id, "request_id"), (evaluation_digest, "evaluation_digest"),
         (action_name, "action_name"), (decision, "decision"), (phase, "phase"),
         (status, "status"), (grant_id, "grant_id"), (effect_digest, "effect_digest"),
+        (policy_version, "policy_version"),
     ):
         if type(value) is not str or not value.strip():
             raise ValueError(f"{field} must be a non-empty string")
-    if policy_version is not None and (type(policy_version) is not str or not policy_version.strip()):
-        raise ValueError("policy_version must be a non-empty string when present")
     for digest, field in (
         (evaluation_digest, "evaluation_digest"),
         (effect_digest, "effect_digest"),

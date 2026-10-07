@@ -28,7 +28,9 @@ from agentshield.platform.pipeline import evaluate_request
 from agentshield.platform.policy import ContentRisk, Decision
 from agentshield.platform.provenance import InputProvenance, TrustLevel
 from agentshield.platform.receipts import build_bundle, load_bundle, verify_bundle
-from agentshield.platform.review import ReviewSigner, ReviewStatus, ReviewVerifier
+from agentshield.platform.review import (
+    ReviewSigner, ReviewStatus, ReviewVerifier, review_approval_digest,
+)
 from agentshield.platform.tools import ToolManifest, ToolRegistry
 
 SCRIPT = Path(__file__).resolve().parents[2] / "tools" / "agentshield_verify.py"
@@ -502,10 +504,29 @@ class ReviewProofEncodingTests(_EvidenceCase):
                 forged["review_approvals"][0][field] = value
                 self._assert_both_reject(forged, review=True)
 
-    def test_uppercase_review_signature_in_receipt_rejected(self):
-        trail, approval = self._reviewed_trail()
-        raw = build_bundle(trail.envelopes, trail.events, review_approvals=(approval,)).to_dict()
-        raw["review_approvals"][0]["signature"] = approval.signature.upper()
+    def test_receipt_consistently_built_on_noncanonical_review_signature_rejected(self):
+        # Exploit (PoC H5b): at e7c64ea the gateway executed with an uppercase-encoded
+        # approval, so execution evidence committed that encoding's digest and the
+        # receipt carried the matching proof. Both verifiers accepted it, giving one
+        # signed approval a second accepted digest. Built here from signed records
+        # because the remediated gateway now refuses the encoding.
+        trail = AuditTrail(self.signer)
+        _, _, _, held = _govern("req-upper-r", MAIL, {"to": "a@example.test"},
+                                grant_id="g-upper-r", trail=trail)
+        approval = _approve(self.review, held)
+        upper = replace(approval, signature=approval.signature.upper())
+        metadata = held.audit_event.metadata
+        consumed_at = approval.issued_at_utc
+        for phase, status in (("grant_consumed", "admitted"), ("dispatch_completed", "executed")):
+            event = build_execution_audit_event(
+                request_id="req-upper-r", evaluation_digest=evaluation_digest(held.audit_event),
+                action_name="mail.send", decision="review", phase=phase, status=status,
+                grant_id="g-upper-r", effect_digest=metadata["effect_digest"],
+                grant_record_digest="e" * 64,
+                review_approval_digest=review_approval_digest(upper),
+            )
+            trail.append(replace(event, timestamp_utc=consumed_at.isoformat()))
+        raw = build_bundle(trail.envelopes, trail.events, review_approvals=(upper,)).to_dict()
         self._assert_both_reject(raw, review=True)
 
 

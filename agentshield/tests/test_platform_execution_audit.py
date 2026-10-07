@@ -72,6 +72,7 @@ class ExecutionAuditTests(unittest.TestCase):
         self.assertIs(result.status, ExecutionStatus.EXECUTED)
         self.assertEqual([e.phase for e in result.audit_events], ["grant_consumed", "dispatch_completed"])
         self.assertEqual([e.status for e in result.audit_events], ["admitted", "executed"])
+        self.assertTrue(all(e.policy_version == pipeline.policy.policy_version for e in result.audit_events))
         self.assertEqual(len(persisted), 2)
         first, second = result.audit_envelopes
         self.assertIs(signer.verify(first, result.audit_events[0]), AuditVerificationStatus.VALID)

@@ -37,8 +37,13 @@ class IdentityBindingTests(unittest.TestCase):
             AuthorizationScope("g", ("read_data",), purpose_id="task-1")
         with self.assertRaises(ValueError):
             AuthorizationScope("g", ("read_data",), delegator_agent_id="agent-0")
+        with self.assertRaises(ValueError):
+            AuthorizationScope(
+                "g", ("read_data",), agent_id="agent-1", purpose_id="task-1",
+                delegator_agent_id="agent-0",
+            )
 
-    def test_scope_v4_binds_agent_purpose_and_delegator(self):
+    def test_scope_v4_binds_agent_purpose_and_delegator_pair(self):
         base = AuthorizationScope(
             "g-agent", ("read_data",), issuer="host",
             allowed_effects=("a" * 64,), principal="user-123", tenant="tenant-a",
@@ -49,10 +54,24 @@ class IdentityBindingTests(unittest.TestCase):
         for forged in (
             replace(base, agent_id="other-agent"),
             replace(base, purpose_id="other-purpose"),
-            replace(base, delegator_agent_id="orchestrator"),
+            replace(
+                base,
+                delegator_agent_id="orchestrator",
+                delegator_grant_id="parent-grant",
+            ),
         ):
             with self.subTest(forged=forged):
                 self.assertNotEqual(scope_digest(base), scope_digest(forged))
+
+    def test_direct_issue_cannot_claim_a_delegator(self):
+        forged_root = AuthorizationScope(
+            "g-root", ("read_data",), issuer="host",
+            allowed_effects=("a" * 64,), principal="user", tenant="tenant",
+            agent_id="research-agent", purpose_id="case-1",
+            delegator_agent_id="fake-parent-agent", delegator_grant_id="fake-parent-grant",
+        )
+        with self.assertRaisesRegex(ValueError, "cannot claim a delegator"):
+            GrantAuthority().issue(forged_root)
 
     def test_grant_rejects_same_id_with_forged_identity(self):
         scope = AuthorizationScope(
@@ -105,13 +124,21 @@ class IdentityBindingTests(unittest.TestCase):
             allowed_effects=("a" * 64,),
             agent_id="research-agent",
             delegator_agent_id="orchestrator-agent",
+            delegator_grant_id="machine-root",
         )
         authority = GrantAuthority()
         authority.issue(parent)
         for forged in (
             replace(child, purpose_id="unrelated-purpose"),
             replace(child, delegator_agent_id="attacker-agent"),
-            replace(child, agent_id=None, purpose_id=None, delegator_agent_id=None),
+            replace(child, delegator_grant_id="attacker-grant"),
+            replace(
+                child,
+                agent_id=None,
+                purpose_id=None,
+                delegator_agent_id=None,
+                delegator_grant_id=None,
+            ),
         ):
             with self.subTest(forged=forged), self.assertRaises(ValueError):
                 authority.delegate(parent, forged)
@@ -122,6 +149,11 @@ class IdentityBindingTests(unittest.TestCase):
         self.assertEqual(material["agent_id"], "research-agent")
         self.assertEqual(material["purpose_id"], "incident-2026-441")
         self.assertEqual(material["delegator_agent_id"], "orchestrator-agent")
+        self.assertEqual(material["delegator_grant_id"], "machine-root")
+        self.assertIs(
+            authority.verify(replace(child, delegator_grant_id="forged-parent"))[0],
+            GrantStatus.MISMATCH,
+        )
 
     def test_legacy_delegation_cannot_acquire_machine_identity(self):
         parent = AuthorizationScope(
@@ -134,6 +166,7 @@ class IdentityBindingTests(unittest.TestCase):
             agent_id="new-agent",
             purpose_id="new-purpose",
             delegator_agent_id="legacy-agent",
+            delegator_grant_id="legacy-root",
         )
         authority = GrantAuthority()
         authority.issue(parent)
@@ -172,6 +205,7 @@ class IdentityBindingTests(unittest.TestCase):
         self.assertEqual(metadata["authorization_agent_id"], "records-agent-9")
         self.assertEqual(metadata["authorization_purpose_id"], "case-8842")
         self.assertIsNone(metadata["authorization_delegator_agent_id"])
+        self.assertIsNone(metadata["authorization_delegator_grant_id"])
         self.assertEqual(metadata["authorization_scope_digest"], scope_digest(scope))
         self.assertTrue(verify_chain(verifier, trail.envelopes, trail.events).valid)
 
@@ -181,6 +215,7 @@ class IdentityBindingTests(unittest.TestCase):
         self.assertEqual(material["scope_schema"], "agentshield-scope-v4-agent-purpose")
         self.assertEqual(material["agent_id"], "records-agent-9")
         self.assertEqual(material["purpose_id"], "case-8842")
+        self.assertIsNone(material["delegator_grant_id"])
 
 
 if __name__ == "__main__":

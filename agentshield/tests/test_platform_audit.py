@@ -40,13 +40,22 @@ class AuditSignerTests(unittest.TestCase):
             AuditVerificationStatus.EVENT_MISMATCH,
         )
 
-    def test_envelope_tamper_is_detected(self):
+    def test_envelope_signature_tamper_is_detected(self):
+        event = {"request_id": "r1", "decision": "allow"}
+        envelope = self.signer.seal(event, sequence=0)
+        tampered = replace(envelope, signature="0" * len(envelope.signature))
+        self.assertIs(
+            self.signer.verify(tampered, event),
+            AuditVerificationStatus.INVALID_SIGNATURE,
+        )
+
+    def test_first_envelope_sequence_tamper_is_chain_mismatch(self):
         event = {"request_id": "r1", "decision": "allow"}
         envelope = self.signer.seal(event, sequence=0)
         tampered = replace(envelope, sequence=9)
         self.assertIs(
             self.signer.verify(tampered, event),
-            AuditVerificationStatus.INVALID_SIGNATURE,
+            AuditVerificationStatus.CHAIN_MISMATCH,
         )
 
     def test_trail_serializes_and_persists_before_acknowledging(self):

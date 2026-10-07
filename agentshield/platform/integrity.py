@@ -102,8 +102,8 @@ def scope_material(scope: AuthorizationScope) -> dict[str, Any]:
 
     Legacy scopes remain v3 so previously issued pre-agent-identity grants do not silently
     acquire claims they never carried. A scope that explicitly binds ``agent_id`` and
-    host-controlled ``purpose_id`` uses v4 and also commits the immediate delegator agent.
-    Exact effects remain SHA-256 commitments; no raw action payload is exposed.
+    host-controlled ``purpose_id`` uses v4 and also commits the immediate delegator agent
+    and parent grant. Exact effects remain SHA-256 commitments; no raw payload is exposed.
     """
 
     material: dict[str, Any] = {
@@ -122,6 +122,7 @@ def scope_material(scope: AuthorizationScope) -> dict[str, Any]:
                 "agent_id": scope.agent_id,
                 "purpose_id": scope.purpose_id,
                 "delegator_agent_id": scope.delegator_agent_id,
+                "delegator_grant_id": scope.delegator_grant_id,
             }
         )
     return material

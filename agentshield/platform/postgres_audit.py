@@ -22,6 +22,7 @@ from .audit import (
     ED25519_ALGORITHM,
     Ed25519AuditSigner,
     envelope_hash,
+    event_hash,
 )
 
 
@@ -138,7 +139,7 @@ class PostgresAuditTrail:
                 f"INSERT INTO {self._table} ("
                 "stream_id, sequence, schema_version, algorithm, previous_envelope_hash, "
                 "event_hash, envelope_hash, key_id, signature, event_json"
-                ") VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)",
+                ") VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb) RETURNING event_json",
                 (
                     self._stream_id, envelope.sequence, envelope.schema_version,
                     envelope.algorithm, envelope.previous_envelope_hash,
@@ -146,6 +147,18 @@ class PostgresAuditTrail:
                     json.dumps(mapped, sort_keys=True, ensure_ascii=False, allow_nan=False),
                 ),
             )
+            # JSONB is not a byte-faithful JSON store: it drops negative zero and
+            # rewrites exponent floats (1e16 -> 10000000000000000), which reloads as a
+            # different canonical event and silently breaks verification of the whole
+            # stream from that record on. Verify the stored form before committing.
+            stored = cur.fetchone()[0]
+            if type(stored) is not dict:
+                stored = json.loads(stored)
+            if event_hash(stored) != envelope.event_hash:
+                raise ValueError(
+                    "audit event cannot be stored losslessly in JSONB; "
+                    "refusing to persist evidence that would not verify"
+                )
             return envelope
 
     def load(self) -> tuple[tuple[AuditEnvelope, ...], tuple[dict[str, Any], ...]]:

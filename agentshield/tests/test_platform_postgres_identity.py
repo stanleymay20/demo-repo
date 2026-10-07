@@ -65,7 +65,7 @@ class PostgresIdentityBindingTests(unittest.TestCase):
         self.authority.delegate(self.scope, child)
         self.assertIs(self.authority.verify(child)[0], GrantStatus.VALID)
 
-    def test_machine_delegation_preserves_purpose_and_parent_agent_across_workers(self):
+    def test_machine_delegation_preserves_purpose_and_parent_lineage_across_workers(self):
         parent = AuthorizationScope(
             "machine-root",
             ("read_data", "transform_text"),
@@ -83,6 +83,7 @@ class PostgresIdentityBindingTests(unittest.TestCase):
             allowed_effects=("a" * 64,),
             agent_id="research-agent",
             delegator_agent_id="orchestrator-agent",
+            delegator_grant_id="machine-root",
         )
         self.authority.issue(parent)
         other = PostgresGrantAuthority(self._connect, table_name=self.table)
@@ -90,7 +91,14 @@ class PostgresIdentityBindingTests(unittest.TestCase):
         for forged in (
             replace(child, purpose_id="unrelated-purpose"),
             replace(child, delegator_agent_id="attacker-agent"),
-            replace(child, agent_id=None, purpose_id=None, delegator_agent_id=None),
+            replace(child, delegator_grant_id="attacker-grant"),
+            replace(
+                child,
+                agent_id=None,
+                purpose_id=None,
+                delegator_agent_id=None,
+                delegator_grant_id=None,
+            ),
         ):
             with self.subTest(forged=forged), self.assertRaises(ValueError):
                 other.delegate(parent, forged)
@@ -100,10 +108,30 @@ class PostgresIdentityBindingTests(unittest.TestCase):
         self.assertEqual(created.parent_grant_id, parent.grant_id)
         self.assertIs(self.authority.verify(child)[0], GrantStatus.VALID)
 
-        forged_agent = replace(child, agent_id="attacker-agent")
-        self.assertIs(other.verify(forged_agent)[0], GrantStatus.MISMATCH)
-        self.assertIs(other.consume(forged_agent)[0], GrantStatus.MISMATCH)
+        for forged in (
+            replace(child, agent_id="attacker-agent"),
+            replace(child, delegator_grant_id="attacker-grant"),
+        ):
+            with self.subTest(forged=forged):
+                self.assertIs(other.verify(forged)[0], GrantStatus.MISMATCH)
+                self.assertIs(other.consume(forged)[0], GrantStatus.MISMATCH)
         self.assertIs(other.verify(child)[0], GrantStatus.VALID)
+
+    def test_postgres_root_authority_cannot_claim_fake_delegator(self):
+        forged_root = AuthorizationScope(
+            "machine-root",
+            ("read_data",),
+            issuer="policy-service",
+            allowed_effects=("a" * 64,),
+            principal="employee-42",
+            tenant="company-7",
+            agent_id="research-agent",
+            purpose_id="case-1",
+            delegator_agent_id="fake-parent-agent",
+            delegator_grant_id="fake-parent-grant",
+        )
+        with self.assertRaisesRegex(ValueError, "cannot claim a delegator"):
+            self.authority.issue(forged_root)
 
     def test_legacy_postgres_authority_cannot_gain_machine_identity_by_delegation(self):
         self.authority.issue(self.scope)
@@ -115,6 +143,7 @@ class PostgresIdentityBindingTests(unittest.TestCase):
             agent_id="new-agent",
             purpose_id="new-purpose",
             delegator_agent_id="legacy-parent-agent",
+            delegator_grant_id="root",
         )
         with self.assertRaises(ValueError):
             self.authority.delegate(self.scope, child)

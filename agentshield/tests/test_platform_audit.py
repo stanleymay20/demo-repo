@@ -5,6 +5,9 @@ from agentshield.platform.audit import (
     AuditSigner,
     AuditTrail,
     AuditVerificationStatus,
+    Ed25519AuditSigner,
+    Ed25519AuditVerifier,
+    verify_chain,
 )
 
 
@@ -70,6 +73,48 @@ class AuditSignerTests(unittest.TestCase):
             trail.append({"request_id": "r1"})
         self.assertEqual(trail.envelopes, ())
         self.assertIsNone(trail.head)
+
+
+class PublicAuditEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.signer = Ed25519AuditSigner({"audit-2026": b"a" * 32}, active_key_id="audit-2026")
+        self.verifier = Ed25519AuditVerifier(self.signer.public_keys())
+
+    def test_public_verifier_checks_chain_without_private_signing_api(self):
+        self.assertFalse(hasattr(self.verifier, "seal"))
+        self.assertFalse(hasattr(self.verifier, "sign"))
+        trail = AuditTrail(self.signer)
+        events = [
+            {"request_id": "r1", "phase": "decision_recorded", "decision": "block"},
+            {"request_id": "r2", "phase": "decision_recorded", "decision": "allow"},
+        ]
+        for event in events:
+            trail.append(event)
+        result = verify_chain(self.verifier, trail.envelopes, trail.events)
+        self.assertTrue(result.valid)
+        self.assertEqual(result.verified_count, 2)
+
+    def test_public_verifier_rejects_event_tamper(self):
+        trail = AuditTrail(self.signer)
+        trail.append({"request_id": "r1", "decision": "block"})
+        result = verify_chain(
+            self.verifier,
+            trail.envelopes,
+            ({"request_id": "r1", "decision": "allow"},),
+        )
+        self.assertIs(result.status, AuditVerificationStatus.EVENT_MISMATCH)
+        self.assertEqual(result.first_invalid_index, 0)
+
+    def test_public_verifier_rejects_chain_reordering(self):
+        trail = AuditTrail(self.signer)
+        trail.append({"request_id": "r1", "decision": "block"})
+        trail.append({"request_id": "r2", "decision": "allow"})
+        result = verify_chain(
+            self.verifier,
+            tuple(reversed(trail.envelopes)),
+            tuple(reversed(trail.events)),
+        )
+        self.assertIs(result.status, AuditVerificationStatus.CHAIN_MISMATCH)
 
 
 if __name__ == "__main__":

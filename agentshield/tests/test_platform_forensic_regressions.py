@@ -439,6 +439,25 @@ class SchemaAndWrapperTests(_EvidenceCase):
             {**raw, "records": [{**raw["records"][0], "record_type": "unsupported"}]}, self.keys)
         self.assertIs(result.status, AuditVerificationStatus.SCHEMA_MISMATCH)
 
+    def test_displayed_identity_without_scope_commitment_is_rejected(self):
+        # F2 residual: a signed decision displaying principal/tenant/grant identity but
+        # carrying neither scope material nor digest skipped scope verification entirely.
+        trail = AuditTrail(self.signer)
+        trail.append({
+            "event_schema_version": "agentshield-audit-event-v1", "request_id": "r",
+            "decision": "block", "policy_version": "agentshield-policy-v7",
+            "metadata": {"authorization_principal": "ceo@bank.test",
+                         "authorization_tenant": "bank", "authorization_grant_id": "g-root"},
+        })
+        self._assert_both_reject(build_bundle(trail.envelopes, trail.events).to_dict())
+        # a decision with no displayed authority at all remains acceptable
+        trail = AuditTrail(self.signer)
+        evaluate_request(
+            request_id="r-none", source_type="user", content="c", action=READ.descriptor,
+            detector=_Low(), audit_trail=trail,
+        )
+        self._assert_both_accept(build_bundle(trail.envelopes, trail.events).to_dict())
+
     def test_unsigned_bundle_and_record_wrapper_fields_are_rejected(self):
         trail = self._executed_allow_trail()
         raw = build_bundle(trail.envelopes, trail.events).to_dict()

@@ -195,7 +195,9 @@ def _scope_evidence_valid(event: Mapping[str, Any]) -> bool:
     digest = metadata.get("authorization_scope_digest")
     material = metadata.get("authorization_scope_material")
     if digest is None and material is None:
-        return True
+        # Displayed authority identity without the canonical commitment is unbound text;
+        # a decision that shows any authorization_* field must prove it.
+        return not any(key.startswith("authorization_") for key in metadata)
     if not _valid_hex_digest(digest) or not _valid_scope_material(material):
         return False
     if hashlib.sha256(_canonical_bytes(material)).hexdigest() != digest:

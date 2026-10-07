@@ -148,6 +148,8 @@ def scope_evidence_error(event):
     digest = metadata.get("authorization_scope_digest")
     material = metadata.get("authorization_scope_material")
     if digest is None and material is None:
+        if any(key.startswith("authorization_") for key in metadata):
+            return "displayed authorization identity has no canonical scope commitment"
         return None
     if not valid_hex_digest(digest) or not valid_scope_material(material):
         return "authorization scope proof is malformed or incomplete"

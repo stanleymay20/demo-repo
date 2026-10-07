@@ -17,7 +17,8 @@ with production durability or external head anchoring.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from enum import Enum
 import secrets
 from typing import Any, Mapping, Protocol
@@ -35,7 +36,7 @@ from .integrity import (
     action_digest, payload_digest, scope_digest, snapshot_payload, tool_manifest_digest,
 )
 from .pipeline import PipelineResult, verify_in_process_evaluation
-from .policy import Decision, POLICY_VERSION, PolicyDecision
+from .policy import ContentRisk, Decision, POLICY_VERSION, PolicyDecision
 from .review import ReviewApproval, ReviewVerifier, ReviewStatus, review_approval_digest
 from .signing import EvaluationSignature, EvaluationSignatureStatus, EvaluationVerifier
 from .tools import ToolRegistry, ToolVerificationStatus, verify_action_descriptor
@@ -68,6 +69,112 @@ class ExecutionResult:
     review_approval_digest: str | None = None
     audit_events: tuple[ExecutionAuditEvent, ...] = ()
     audit_envelopes: tuple[AuditEnvelope, ...] = ()
+
+
+# Every caller-supplied authority object is re-materialized from exact built-in values
+# before any check runs. A ``str``/``datetime`` subclass can lie in ``__eq__``/``__ne__``,
+# a property can answer differently on each read, and a shared mutable mapping can be
+# changed by another thread between a check and the seal verification. Checks and
+# dispatch therefore operate only on private snapshots built from exact types.
+_SCOPE_TEXT_FIELDS = (
+    "grant_id", "issuer", "principal", "tenant", "agent_id", "purpose_id",
+    "delegator_agent_id", "delegator_grant_id",
+)
+_REVIEW_TEXT_FIELDS = (
+    "approval_id", "request_id", "action_digest", "payload_digest", "scope_digest",
+    "tool_manifest_digest", "policy_version", "evaluation_digest", "reviewer", "key_id",
+    "signature",
+)
+
+
+def _exact_text_tuple(values: Any) -> tuple[str, ...] | None:
+    if type(values) not in (tuple, list):
+        return None
+    copied = tuple(values)
+    return copied if all(type(item) is str for item in copied) else None
+
+
+def _snapshot_action(action: Any) -> ActionDescriptor | None:
+    if type(action) is not ActionDescriptor or type(action.name) is not str:
+        return None
+    capabilities = _exact_text_tuple(action.capabilities)
+    return None if capabilities is None else ActionDescriptor(action.name, capabilities)
+
+
+def _snapshot_scope(scope: Any) -> AuthorizationScope | None:
+    if type(scope) is not AuthorizationScope:
+        return None
+    for field in _SCOPE_TEXT_FIELDS:
+        value = getattr(scope, field)
+        if value is not None and type(value) is not str:
+            return None
+    if (
+        _exact_text_tuple(scope.allowed_capabilities) is None
+        or _exact_text_tuple(scope.allowed_effects) is None
+    ):
+        return None
+    return replace(scope)
+
+
+def _snapshot_review_approval(approval: Any) -> ReviewApproval | None:
+    if type(approval) is not ReviewApproval:
+        return None
+    if any(type(getattr(approval, field)) is not str for field in _REVIEW_TEXT_FIELDS):
+        return None
+    if type(approval.issued_at_utc) is not datetime or type(approval.expires_at_utc) is not datetime:
+        return None
+    return replace(approval)
+
+
+def _snapshot_evaluation_signature(signature: Any) -> EvaluationSignature | None:
+    if type(signature) is not EvaluationSignature:
+        return None
+    if any(
+        type(getattr(signature, field)) is not str
+        for field in ("key_id", "evaluation_digest", "signature")
+    ):
+        return None
+    return replace(signature)
+
+
+def _snapshot_pipeline_result(result: PipelineResult) -> PipelineResult | None:
+    """Detach the evaluation so the seal authenticates exactly what is later checked."""
+
+    policy = result.policy
+    detection = result.detection
+    if (
+        type(policy.decision) is not Decision
+        or type(policy.policy_version) is not str
+        or type(policy.reason) is not str
+        or type(detection.content_risk) is not ContentRisk
+        or type(detection.detector_name) is not str
+        or type(detection.detector_version) is not str
+        or (detection.score is not None and type(detection.score) not in (int, float))
+        or (detection.rationale is not None and type(detection.rationale) is not str)
+        or type(result._integrity_tag) is not str
+    ):
+        return None
+    try:
+        event_fields = snapshot_payload(result.audit_event.to_dict())
+        event = AuditEvent(**event_fields)
+    except (TypeError, ValueError):
+        return None
+    return PipelineResult(
+        detection=DetectionResult(
+            content_risk=detection.content_risk,
+            score=detection.score,
+            detector_name=detection.detector_name,
+            detector_version=detection.detector_version,
+            rationale=detection.rationale,
+        ),
+        policy=PolicyDecision(
+            decision=policy.decision,
+            policy_version=policy.policy_version,
+            reason=policy.reason,
+        ),
+        audit_event=event,
+        _integrity_tag=result._integrity_tag,
+    )
 
 
 def enforce_and_execute(
@@ -103,7 +210,48 @@ def enforce_and_execute(
             reason="pipeline result is not an exact AgentShield evaluation record",
         )
 
+    snapshot = _snapshot_pipeline_result(pipeline_result)
+    if snapshot is None:
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            decision=Decision.BLOCK,
+            reason="pipeline result contains non-canonical or non-exact evaluation values",
+        )
+    pipeline_result = snapshot
     decision = pipeline_result.policy.decision
+
+    checked_action = _snapshot_action(action)
+    if checked_action is None:
+        return ExecutionResult(
+            status=ExecutionStatus.BLOCKED, decision=decision,
+            reason="action descriptor is not an exact AgentShield action record",
+        )
+    action = checked_action
+    if authorization_scope is not None:
+        checked_scope = _snapshot_scope(authorization_scope)
+        if checked_scope is None:
+            return ExecutionResult(
+                status=ExecutionStatus.BLOCKED, decision=decision,
+                reason="authorization scope is not an exact AgentShield scope record",
+            )
+        authorization_scope = checked_scope
+    if review_approval is not None:
+        checked_approval = _snapshot_review_approval(review_approval)
+        if checked_approval is None:
+            return ExecutionResult(
+                status=ExecutionStatus.BLOCKED, decision=decision,
+                reason="review approval is not an exact AgentShield approval record",
+            )
+        review_approval = checked_approval
+    if evaluation_signature is not None:
+        checked_signature = _snapshot_evaluation_signature(evaluation_signature)
+        if checked_signature is None:
+            return ExecutionResult(
+                status=ExecutionStatus.BLOCKED, decision=decision,
+                reason="evaluation signature is not an exact AgentShield signature record",
+            )
+        evaluation_signature = checked_signature
+
     if (
         pipeline_result.policy.policy_version != POLICY_VERSION
         or pipeline_result.audit_event.policy_version != POLICY_VERSION
@@ -392,7 +540,10 @@ def enforce_and_execute(
 
     try:
         output = executor.execute(action_name=action.name, payload=execution_payload)
-    except Exception as exc:
+    except BaseException as exc:
+        # KeyboardInterrupt/SystemExit/cancellation still crossed the dispatch boundary
+        # after grant consumption. Record the ambiguous outcome before propagating it so
+        # evidence never ends at "admitted" for a dispatch that was actually attempted.
         failed_event = build_execution_audit_event(
             request_id=event.request_id,
             evaluation_digest=admitted_evaluation_digest,
@@ -411,6 +562,8 @@ def enforce_and_execute(
             envelopes = (consumed_envelope, failed_envelope)
         except Exception:
             envelopes = (consumed_envelope,)
+        if not isinstance(exc, Exception):
+            raise
         return ExecutionResult(
             status=ExecutionStatus.FAILED,
             decision=decision,

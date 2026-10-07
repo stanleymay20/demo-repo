@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from agentshield.platform.anchors import (
@@ -82,6 +83,17 @@ class HeadAnchorTests(unittest.TestCase):
         trail.append({"request_id": "r1"})
         with self.assertRaises(ValueError):
             build_head_anchor_statement(stream_id="stream", head=trail.head)
+
+    def test_unsupported_audit_schema_cannot_be_anchored(self):
+        signer = Ed25519AuditSigner({"audit": b"h" * 32}, active_key_id="audit")
+        trail = AuditTrail(signer)
+        trail.append({"request_id": "r1"})
+        unsupported = replace(
+            trail.head,
+            schema_version="agentshield-audit-envelope-v999",
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported audit envelope schema"):
+            build_head_anchor_statement(stream_id="stream", head=unsupported)
 
     def test_provider_commitment_mismatch_fails_closed(self):
         signer = Ed25519AuditSigner({"audit": b"h" * 32}, active_key_id="audit")

@@ -28,6 +28,17 @@ from .audit import (
 
 BUNDLE_SCHEMA_VERSION = "agentshield-evidence-bundle-v1"
 RECEIPT_PROFILE = "agentshield-verifiable-action-receipt-v1"
+SCOPE_SCHEMA_VERSION = "agentshield-scope-v3"
+_SCOPE_KEYS = {
+    "scope_schema",
+    "grant_id",
+    "issuer",
+    "principal",
+    "tenant",
+    "allowed_capabilities",
+    "allowed_effects",
+}
+_HEX = frozenset("0123456789abcdef")
 
 
 @dataclass(frozen=True)
@@ -65,6 +76,16 @@ class EvidenceBundle:
         )
 
 
+def _canonical_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
 def _event_mapping(event: Any) -> dict[str, Any]:
     if hasattr(event, "to_dict"):
         value = event.to_dict()
@@ -87,6 +108,58 @@ def _record_type(event: Mapping[str, Any]) -> str:
     if isinstance(schema, str) and schema.startswith("agentshield-execution-audit-event-"):
         return "execution_lifecycle"
     return "audit_event"
+
+
+def _valid_hex_digest(value: Any) -> bool:
+    return type(value) is str and len(value) == 64 and all(char in _HEX for char in value)
+
+
+def _valid_scope_material(value: Any) -> bool:
+    if type(value) is not dict or set(value) != _SCOPE_KEYS:
+        return False
+    if value.get("scope_schema") != SCOPE_SCHEMA_VERSION:
+        return False
+    for field in ("grant_id", "issuer"):
+        item = value.get(field)
+        if type(item) is not str or not item.strip() or item != item.strip():
+            return False
+    for field in ("principal", "tenant"):
+        item = value.get(field)
+        if item is not None and (
+            type(item) is not str or not item.strip() or item != item.strip()
+        ):
+            return False
+    capabilities = value.get("allowed_capabilities")
+    if type(capabilities) is not list or any(type(item) is not str for item in capabilities):
+        return False
+    normalized = sorted({item.strip().lower() for item in capabilities if item.strip()})
+    if capabilities != normalized:
+        return False
+    effects = value.get("allowed_effects")
+    if type(effects) is not list or any(not _valid_hex_digest(item) for item in effects):
+        return False
+    return effects == sorted(set(effects))
+
+
+def _scope_evidence_valid(event: Mapping[str, Any]) -> bool:
+    metadata = event.get("metadata")
+    if type(metadata) is not dict:
+        return True
+    digest = metadata.get("authorization_scope_digest")
+    material = metadata.get("authorization_scope_material")
+    if digest is None and material is None:
+        return True
+    if not _valid_hex_digest(digest) or not _valid_scope_material(material):
+        return False
+    if hashlib.sha256(_canonical_bytes(material)).hexdigest() != digest:
+        return False
+    expected_metadata = {
+        "authorization_grant_id": material["grant_id"],
+        "authorization_issuer": material["issuer"],
+        "authorization_principal": material["principal"],
+        "authorization_tenant": material["tenant"],
+    }
+    return all(metadata.get(field) == value for field, value in expected_metadata.items())
 
 
 def build_bundle(
@@ -163,11 +236,17 @@ def verify_bundle(
     bundle: EvidenceBundle | str | bytes | Mapping[str, Any],
     public_keys: Mapping[str, bytes],
 ) -> ChainVerificationResult:
-    """Verify signed events, their semantic record types and every hash-chain link."""
+    """Verify signed events, authority commitments, semantics and hash-chain links."""
 
     parsed = bundle if isinstance(bundle, EvidenceBundle) else load_bundle(bundle)
     for index, record in enumerate(parsed.records):
         if record.record_type != _record_type(record.event):
+            return ChainVerificationResult(
+                AuditVerificationStatus.EVENT_MISMATCH,
+                verified_count=index,
+                first_invalid_index=index,
+            )
+        if record.record_type == "policy_decision" and not _scope_evidence_valid(record.event):
             return ChainVerificationResult(
                 AuditVerificationStatus.EVENT_MISMATCH,
                 verified_count=index,

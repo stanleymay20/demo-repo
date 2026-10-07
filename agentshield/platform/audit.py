@@ -31,6 +31,7 @@ class AuditVerificationStatus(str, Enum):
     EVENT_MISMATCH = "event_mismatch"
     CHAIN_MISMATCH = "chain_mismatch"
     ALGORITHM_MISMATCH = "algorithm_mismatch"
+    SCHEMA_MISMATCH = "schema_mismatch"
     INVALID_SIGNATURE = "invalid_signature"
 
 
@@ -188,6 +189,8 @@ class AuditSigner:
         *,
         previous: AuditEnvelope | None = None,
     ) -> AuditVerificationStatus:
+        if envelope.schema_version != AUDIT_ENVELOPE_SCHEMA_VERSION:
+            return AuditVerificationStatus.SCHEMA_MISMATCH
         if envelope.algorithm != HMAC_ALGORITHM:
             return AuditVerificationStatus.ALGORITHM_MISMATCH
         key = self._keys.get(envelope.key_id)
@@ -297,6 +300,8 @@ class Ed25519AuditVerifier:
         *,
         previous: AuditEnvelope | None = None,
     ) -> AuditVerificationStatus:
+        if envelope.schema_version != AUDIT_ENVELOPE_SCHEMA_VERSION:
+            return AuditVerificationStatus.SCHEMA_MISMATCH
         if envelope.algorithm != ED25519_ALGORITHM:
             return AuditVerificationStatus.ALGORITHM_MISMATCH
         key = self._keys.get(envelope.key_id)

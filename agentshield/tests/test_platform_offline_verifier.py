@@ -46,7 +46,7 @@ class StandaloneVerifierTests(unittest.TestCase):
         finally:
             Path(path).unlink(missing_ok=True)
 
-    def _v4_bundle(self, *, displayed_purpose="case-8842"):
+    def _v4_bundle(self, *, displayed_purpose="case-8842", displayed_parent_grant="g-parent"):
         material = {
             "scope_schema": "agentshield-scope-v4-agent-purpose",
             "grant_id": "g-v4",
@@ -58,6 +58,7 @@ class StandaloneVerifierTests(unittest.TestCase):
             "agent_id": "records-agent-9",
             "purpose_id": "case-8842",
             "delegator_agent_id": "orchestrator-agent",
+            "delegator_grant_id": "g-parent",
         }
         trail = AuditTrail(self.signer)
         trail.append({
@@ -73,6 +74,7 @@ class StandaloneVerifierTests(unittest.TestCase):
                 "authorization_agent_id": "records-agent-9",
                 "authorization_purpose_id": displayed_purpose,
                 "authorization_delegator_agent_id": "orchestrator-agent",
+                "authorization_delegator_grant_id": displayed_parent_grant,
                 "authorization_scope_material": material,
                 "authorization_scope_digest": self._digest(material),
             },
@@ -141,7 +143,7 @@ class StandaloneVerifierTests(unittest.TestCase):
             "authorization scope digest does not match canonical scope material",
         )
 
-    def test_outsider_verifies_agent_and_purpose_bound_scope_v4(self):
+    def test_outsider_verifies_agent_purpose_and_parent_grant_bound_scope_v4(self):
         completed = self._run(self._v4_bundle().to_dict())
         self.assertEqual(completed.returncode, 0, completed.stderr)
         result = json.loads(completed.stdout)
@@ -149,9 +151,20 @@ class StandaloneVerifierTests(unittest.TestCase):
         self.assertEqual(result["verified_records"], 1)
 
     def test_outsider_rejects_signed_v4_display_identity_mismatch(self):
-        # The event itself is freshly and validly Ed25519-signed. Verification must still
-        # reject a displayed purpose that disagrees with the canonical authority material.
         completed = self._run(self._v4_bundle(displayed_purpose="other-purpose").to_dict())
+        self.assertEqual(completed.returncode, 1)
+        result = json.loads(completed.stderr)
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["verified_records"], 0)
+        self.assertEqual(
+            result["reason"],
+            "displayed authorization identity does not match canonical scope material",
+        )
+
+    def test_outsider_rejects_signed_v4_parent_grant_display_mismatch(self):
+        completed = self._run(
+            self._v4_bundle(displayed_parent_grant="forged-parent").to_dict()
+        )
         self.assertEqual(completed.returncode, 1)
         result = json.loads(completed.stderr)
         self.assertFalse(result["valid"])

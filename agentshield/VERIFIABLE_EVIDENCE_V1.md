@@ -57,6 +57,8 @@ Principal and tenant are part of `agentshield-scope-v3` and therefore part of th
 
 **Migration:** grants issued against the older v2 scope digest must be reissued by trusted infrastructure. Failing closed on an old digest is intentional; the runtime must not silently reinterpret old grants as identity-bound authority.
 
+The current scope does **not** yet bind a concrete `agent_id` or host-controlled `purpose_id`. Do not describe v1 as complete machine-identity or purpose-bound delegated authority.
+
 ## Portable evidence bundles
 
 `agentshield.platform.receipts` defines the AgentShield-native draft profile:
@@ -66,7 +68,21 @@ Principal and tenant are part of `agentshield-scope-v3` and therefore part of th
 
 A bundle carries the exact signed event and audit envelope for each record. Public keys are intentionally **not** embedded as trusted keys. The verifier must receive the expected public key through an independent channel.
 
+The verifier also derives the expected `record_type` from the signed event schema and rejects semantic relabelling of a valid signed event.
+
 The profile is designed to map to emerging signed/hash-chained agent-receipt work, but **does not claim conformance to a final IETF standard**.
+
+### Current assurance boundary
+
+The current portable bundle is a verifiable **audit-evidence bundle**, not yet a complete self-contained proof of every underlying authority primitive.
+
+In particular:
+
+- the receipt exposes an authorization scope digest and signed identity assertions, but does not yet carry the complete canonical scope material required for an outsider to recompute that digest independently;
+- executed REVIEW evidence carries a `review_approval_digest`, but the signed `ReviewApproval` object is not yet embedded as portable proof and therefore cannot be independently re-verified from the receipt alone;
+- `exported_at_utc` is outer bundle metadata, not signed event evidence.
+
+These boundaries are tracked in `audits/PR10_FORENSIC_AUDIT_2026-10-07.md` and must remain explicit in product claims.
 
 ## Offline verifier
 
@@ -84,9 +100,10 @@ A successful verification establishes that, relative to the supplied public-key 
 1. every event matches its signed hash;
 2. every Ed25519 signature is valid;
 3. sequence/order and previous-envelope links are intact;
-4. the chain head can be independently recomputed.
+4. each receipt record type matches its signed event schema;
+5. the chain head can be independently recomputed.
 
-It does **not** by itself prove that the signing service was uncompromised, that the public-key distribution channel is trustworthy, or that no valid signed suffix was removed after the latest externally anchored head.
+It does **not** by itself prove that the signing service was uncompromised, that the public-key distribution channel is trustworthy, that the complete authorization-scope material was independently recomputed, that a human-review signature was independently re-verified, or that no valid signed suffix was removed after the latest externally anchored head.
 
 ## Durable PostgreSQL evidence stream
 
@@ -108,30 +125,38 @@ The integration suite races multiple workers against one stream and verifies tha
 
 **The repository does not ship or configure an external anchoring provider.** A fake local anchor would not improve the trust model. Deployment evidence is only externally anchored once a real independently controlled provider accepts the chain-head statement and returns a durable reference.
 
+The generic publisher contract does not itself prove that an external reference commits to the exact canonical statement bytes or cryptographically authenticate the caller-supplied `stream_id`. A real provider adapter must define and test those guarantees.
+
 ## End-to-end refusal demonstration
 
 `examples/agentshield_verifiable_block_demo.py` proposes a destructive `delete_data` action against `production.users`, receives a policy BLOCK, exports the signed BLOCK event, and prints the public key needed by the standalone verifier. The demonstration does not connect to or delete from a real database.
 
-The test suite then invokes `tools/agentshield_verify.py` in a separate process and proves that rewriting the decision or signed event is detected.
+The test suite then invokes `tools/agentshield_verify.py` in a separate process and proves that rewriting the decision, signed event, or semantic record type is detected.
 
 ## Still open before an external GA claim
 
 This branch intentionally does not paper over the remaining work:
 
-1. **Real external head anchoring.** Configure and operationally prove an independently controlled anchor provider; the integration contract alone is not an external anchor.
-2. **Independent security review.** Internal and AI-assisted review is not a substitute for an external human/security review of the final diff.
-3. **Repository/admin GA gates.** Main-branch protection, required checks/reviews, license choice and canonical-main convergence remain separate release gates.
-4. **Production key management.** Private signing keys must be held outside agent control, rotated deliberately, and distributed to verifiers through an authenticated public-key channel.
-5. **Detector claims.** Verifiable governance evidence does not establish universal prompt-injection detection or a 99.999% prevention rate.
+1. **Self-contained authorization proof.** Carry privacy-safe canonical scope material and have offline verification recompute the scope digest.
+2. **Portable human-review proof.** Include and independently verify the signed `ReviewApproval` for executed REVIEW decisions.
+3. **Machine identity / purpose binding.** Freeze semantics for `agent_id`, delegation lineage and host-controlled `purpose_id` before another scope-version migration.
+4. **Real external head anchoring.** Configure and operationally prove an independently controlled anchor provider, including exact-statement commitment and stream-binding semantics.
+5. **Independent security review.** Internal and AI-assisted review is not a substitute for an external human/security review of the final diff.
+6. **Repository/admin GA gates.** Main-branch protection, required checks/reviews, license choice and canonical-main convergence remain separate release gates.
+7. **Production key management.** Private signing keys must be held outside agent control, rotated deliberately, and distributed to verifiers through an authenticated public-key channel.
+8. **Detector claims.** Verifiable governance evidence does not establish universal prompt-injection detection or a 99.999% prevention rate.
 
 ## Safe claim boundary for this draft
 
-Only after the exact-head test matrix is green, it is reasonable to say:
+Only after the latest exact-head test matrix is green, it is reasonable to say:
 
-> AgentShield has a draft Ed25519-signed evidence layer that records ALLOW, REVIEW and BLOCK decisions, cryptographically binds acting principal/tenant identity into authorization, persists one serialized evidence chain across PostgreSQL workers, exports a portable hash-chained JSON bundle, and verifies that bundle offline with public keys only.
+> AgentShield has a draft Ed25519-signed audit-evidence layer that records ALLOW, REVIEW and BLOCK decisions, binds principal/tenant identity into its internal authorization scope, persists one serialized evidence chain across PostgreSQL workers, exports a portable hash-chained JSON bundle, rejects semantic record relabelling, and verifies signed events offline with public keys only.
 
 Do not yet say:
 
+- the receipt independently reconstructs and proves every authorization-scope field;
+- the receipt independently proves a human-review signature;
+- complete machine identity and purpose-bound delegation are implemented;
 - every AgentShield deployment produces independent receipts;
 - production history is externally anchored or impossible to truncate;
 - the format is an adopted IETF standard;

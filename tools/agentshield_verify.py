@@ -49,6 +49,15 @@ def signature_material(envelope):
     }
 
 
+def record_type_for_event(event):
+    schema = event.get("event_schema_version")
+    if schema == "agentshield-audit-event-v1":
+        return "policy_decision"
+    if isinstance(schema, str) and schema.startswith("agentshield-execution-audit-event-"):
+        return "execution_lifecycle"
+    return "audit_event"
+
+
 def parse_keys(values):
     keys = {}
     for value in values:
@@ -85,10 +94,15 @@ def verify(bundle, keys):
     for index, record in enumerate(records):
         if type(record) is not dict:
             return False, "record is not an object", index, None
+        record_type = record.get("record_type")
         event = record.get("event")
         envelope = record.get("envelope")
+        if type(record_type) is not str or not record_type.strip():
+            return False, "record_type is missing", index, None
         if type(event) is not dict or type(envelope) is not dict:
             return False, "record lacks event/envelope objects", index, None
+        if record_type != record_type_for_event(event):
+            return False, "record_type does not match signed event schema", index, None
         required = {
             "schema_version", "sequence", "previous_envelope_hash", "event_hash",
             "key_id", "signature", "algorithm",

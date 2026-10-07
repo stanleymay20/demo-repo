@@ -1,5 +1,7 @@
 # AgentShield PR #10 — Verifiable Evidence Forensic Audit
 
+> Superseded in part by `PR10_INDEPENDENT_AUDIT_2026-10-07.md`, which audited `e7c64ea` independently, reopened F2 (incomplete) and found N1–N16. This document is kept unchanged below as the historical record.
+
 Date: 2026-10-07
 
 PR: #10 `AgentShield: verifiable evidence layer v1`

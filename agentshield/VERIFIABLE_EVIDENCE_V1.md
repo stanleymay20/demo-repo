@@ -269,7 +269,10 @@ The internal forensic findings are closed at the latest verified code head. The 
 4. protected canonical `main` with required reviews/status checks;
 5. repository license choice;
 6. controlled convergence through the PR #9 lineage before any merge to `main`;
-7. detector research remains separate and cannot justify universal `100%` or `99.999%` prevention claims.
+7. detector research remains separate and cannot justify universal `100%` or `99.999%` prevention claims;
+8. receipt privacy and scale: v1 receipts must be verified from sequence 0, so a receipt carries every earlier record in its stream. Use one stream per tenant (ideally per principal) until a checkpoint/inclusion-proof receipt exists;
+9. an evidence-mandatory execution mode: without an injected Ed25519 trail the gateway falls back to a process-ephemeral HMAC trail, so "no action without evidence" currently depends on host wiring;
+10. offline verification of anchor receipts against a bundle head, and PostgreSQL lock/statement timeouts for evidence streams.
 
 Repository checks during the forensic pass confirmed that `main` is currently unprotected, no repository ruleset is configured, no license is configured, and neither PR #9 nor PR #10 currently has a submitted human review.
 

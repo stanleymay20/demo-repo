@@ -58,6 +58,15 @@ class AuditSignerTests(unittest.TestCase):
             AuditVerificationStatus.CHAIN_MISMATCH,
         )
 
+    def test_unsupported_envelope_schema_fails_closed(self):
+        event = {"request_id": "r1", "decision": "allow"}
+        envelope = self.signer.seal(event, sequence=0)
+        unsupported = replace(envelope, schema_version="agentshield-audit-envelope-v999")
+        self.assertIs(
+            self.signer.verify(unsupported, event),
+            AuditVerificationStatus.SCHEMA_MISMATCH,
+        )
+
     def test_trail_serializes_and_persists_before_acknowledging(self):
         persisted = []
         trail = AuditTrail(self.signer, sink=lambda envelope, event: persisted.append((envelope, event)))
@@ -124,6 +133,15 @@ class PublicAuditEvidenceTests(unittest.TestCase):
             tuple(reversed(trail.events)),
         )
         self.assertIs(result.status, AuditVerificationStatus.CHAIN_MISMATCH)
+
+    def test_public_verifier_rejects_unsupported_envelope_schema(self):
+        event = {"request_id": "r1", "decision": "block"}
+        envelope = self.signer.seal(event, sequence=0)
+        unsupported = replace(envelope, schema_version="agentshield-audit-envelope-v999")
+        self.assertIs(
+            self.verifier.verify(unsupported, event),
+            AuditVerificationStatus.SCHEMA_MISMATCH,
+        )
 
 
 if __name__ == "__main__":

@@ -217,6 +217,7 @@ def evaluate_request(
                 "authorization_agent_id": authorization_scope.agent_id,
                 "authorization_purpose_id": authorization_scope.purpose_id,
                 "authorization_delegator_agent_id": authorization_scope.delegator_agent_id,
+                "authorization_delegator_grant_id": authorization_scope.delegator_grant_id,
             }
         )
     if grant_record is not None:

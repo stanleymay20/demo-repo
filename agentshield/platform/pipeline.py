@@ -114,8 +114,6 @@ def evaluate_request(
     verifiable proof of ALLOW, REVIEW and BLOCK decisions.
     """
 
-    # Bind the submitted effect before any detector/authority callback can change
-    # caller-owned payload state. Invalid payloads never reach those callbacks.
     submitted_payload_digest = payload_digest(payload)
     if type(content) is not str:
         raise ValueError("content must be a plain string")
@@ -205,6 +203,9 @@ def evaluate_request(
             {
                 "authorization_grant_id": authorization_scope.grant_id,
                 "authorization_scope_digest": scope_digest(authorization_scope),
+                "authorization_issuer": authorization_scope.issuer,
+                "authorization_principal": authorization_scope.principal,
+                "authorization_tenant": authorization_scope.tenant,
             }
         )
     if grant_record is not None:

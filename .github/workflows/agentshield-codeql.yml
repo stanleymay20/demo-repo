@@ -5,11 +5,15 @@ on:
     branches: [main]
     paths:
       - 'agentshield/**'
+      - 'tools/agentshield_verify.py'
+      - 'examples/agentshield_*.py'
       - 'pyproject.toml'
       - '.github/workflows/agentshield-codeql.yml'
   pull_request:
     paths:
       - 'agentshield/**'
+      - 'tools/agentshield_verify.py'
+      - 'examples/agentshield_*.py'
       - 'pyproject.toml'
       - '.github/workflows/agentshield-codeql.yml'
   workflow_dispatch:

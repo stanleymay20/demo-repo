@@ -108,6 +108,32 @@ class StandaloneVerifierTests(unittest.TestCase):
         self.assertEqual(result["verified_records"], 0)
         self.assertEqual(result["reason"], "record_type does not match signed event schema")
 
+    def test_outsider_rejects_noncanonical_head_signature_encoding(self):
+        raw = self.bundle.to_dict()
+        signature = raw["records"][0]["envelope"]["signature"]
+        raw["records"][0]["envelope"]["signature"] = (
+            signature[:64] + " " + signature[64:]
+        )
+        completed = self._run(raw)
+        self.assertEqual(completed.returncode, 1)
+        result = json.loads(completed.stderr)
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["verified_records"], 0)
+        self.assertEqual(
+            result["reason"],
+            "signature is not canonical lowercase Ed25519 hex",
+        )
+
+    def test_outsider_rejects_unsigned_extra_envelope_fields(self):
+        raw = self.bundle.to_dict()
+        raw["records"][0]["envelope"]["display_label"] = "trusted"
+        completed = self._run(raw)
+        self.assertEqual(completed.returncode, 1)
+        result = json.loads(completed.stderr)
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["verified_records"], 0)
+        self.assertEqual(result["reason"], "envelope fields do not match schema")
+
     def test_outsider_rejects_signed_inconsistent_authorization_scope_proof(self):
         trail = AuditTrail(self.signer)
         material = {
